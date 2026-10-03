@@ -158,6 +158,12 @@ locate_repo() {
             REPO_DIR="$_guess"; return 0
         fi
     fi
+    # tarball 方式解压出来的目录名带版本后缀，形如 /opt/Treenput-main
+    for _cand in /opt/Treenput* /usr/local/src/Treenput*; do
+        if [ -f "$_cand/engine/build_cn_engine.py" ]; then
+            REPO_DIR="$_cand"; return 0
+        fi
+    done
     if [ -f "$REPO_DIR/engine/build_cn_engine.py" ]; then
         return 0
     fi
@@ -174,10 +180,16 @@ ensure_repo() {
         info "更新已有克隆 $REPO_DIR"
         git -C "$REPO_DIR" fetch --depth 1 origin || true
         git -C "$REPO_DIR" reset --hard FETCH_HEAD || true
-    else
-        git clone --depth 1 "$REPO_URL" "$REPO_DIR"
+    elif ! git clone --depth 1 "$REPO_URL" "$REPO_DIR"; then
+        # clone 失败最常见的原因是 raw.githubusercontent / github.com 被拦。
+        # 给出可直接粘贴的备用通道，而不是让set -e 静默中断。
+        die "git clone 失败。若网络受限，改用打包下载：
+  curl -fsSL https://codeload.github.com/SZYTree0312/Treenput/tar.gz/refs/heads/main \\
+    | sudo tar -xz -C /opt && sudo /opt/Treenput-main/install.sh
+  或先手动 clone 到任意目录，再 cd 进去执行 sudo ./install.sh"
     fi
-    [ -f "$REPO_DIR/engine/build_cn_engine.py" ] || die "仓库异常：找不到 engine/build_cn_engine.py"
+    [ -f "$REPO_DIR/engine/build_cn_engine.py" ] \
+        || die "仓库内容异常：$REPO_DIR 下找不到 engine/build_cn_engine.py"
 }
 
 # ---------------------------------------------------------------- 引擎

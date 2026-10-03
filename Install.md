@@ -14,7 +14,20 @@ curl -fsSL https://raw.githubusercontent.com/SZYTree0312/Treenput/main/install.s
 > 屏幕键盘进程是被 phosh 拉起的，**装完不重启 phosh 的话当前会话里还是旧的
 > `phosh-osk-stub`（无中文）**。想立刻生效就用 `--replace-now`，或直接重启手机。
 
-不想让 Agent 装、或需要在没网的环境手动装，见 **[docs/Manual.md](docs/Manual.md)**。
+### 取不到 raw.githubusercontent.com？
+
+部分网络环境（含国内代理）会拦这个域名。改用打包下载，功能完全一样：
+
+```sh
+curl -fsSL https://codeload.github.com/SZYTree0312/Treenput/tar.gz/refs/heads/main \
+  | sudo tar -xz -C /opt && sudo /opt/Treenput-main/install.sh
+```
+
+或者直接 `git clone`：
+
+```sh
+git clone https://github.com/SZYTree0312/Treenput && cd Treenput && sudo ./install.sh
+```
 
 ---
 
