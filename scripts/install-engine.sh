@@ -61,6 +61,6 @@ echo "  繁体残留: $TRAD （期望 0）"
 echo "  ni 的首候选: $(grep -m1 '((("n" "i")))' "$ENGINE" | sed 's/.*((\"n\" \"i\")) (//;s/).*//' | cut -d' ' -f1)"
 
 echo
-echo "完成。剩余步骤见 docs/Install.md 第 4-5 步："
+echo "完成。剩余步骤见 Install.md 第 4-5 步："
 echo "  1. 构建/安装 stevia 屏幕键盘（scripts/build-stevia.sh）"
 echo "  2. gsettings set org.gnome.desktop.input-sources sources \"[('xkb','us'),('ibus','uim:cn')]\""
