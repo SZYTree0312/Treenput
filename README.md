@@ -70,7 +70,17 @@ Debian 维护者已转换过。所以我们不需要重新造词库，只需做�
 
 ## 快速安装
 
-见 **[Install.md](Install.md)**。
+一句命令，把这行丢给 Agent（SSH 已连上设备）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/SZYTree0312/Treenput/main/install.sh | sudo sh
+```
+
+装完**重启 phosh**（或 `--replace-now` 立刻替换屏幕键盘），点键盘左上角切到拼音模式，
+输 `ni hao` 看是否出「你好」。
+
+选项、常见情况见 **[Install.md](Install.md)**；
+手动逐步安装见 **[docs/Manual.md](docs/Manual.md)**。
 
 ---
 
@@ -88,18 +98,18 @@ Debian 维护者已转换过。所以我们不需要重新造词库，只需做�
 
 ```
 Treenput/
+├── install.sh                一键安装（唯一入口）
+├── Install.md               安装说明：一句命令 + 选项 + 常见情况
 ├── engine/
-│   └── build_cn_engine.py     核心：解析上游表 → 生成简体引擎
-├── scripts/
-│   ├── build-stevia.sh        从源码构建 stevia 屏幕键盘
-│   └── install-engine.sh      安装本项目生成的引擎
+│   ├── build_cn_engine.py     核心：解析上游表 → 生成简体引擎
+│   └── verify_engine.py       校验器：繁体残留 + 首候选抽查
 ├── data/
-│   └── frequency.txt          词频表（每行一词，可选但强烈建议）
+│   └── frequency.txt          词频表（每行一词）
 ├── docs/
-│   ├── Install.md             安装步骤
-│   ├── TroubleShooting.md    排障（含 fcitx5 事故复盘）
-│   └── Research.md           调研记录：为什么每条传统路线都走不通
-└── README.md
+│   ├── Manual.md              手动安装步骤（兜底，无网/非 Mobian 时用）
+│   ├── TroubleShooting.md     排障（含 fcitx5 事故复盘）
+│   └── Research.md            调研记录：为什么每条传统路线都走不通
+└── LICENSE
 ```
 
 ---

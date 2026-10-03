@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """从 uim 的 pinyin-big5 候选表生成简体拼音引擎 cn-utf8。
 
+Treenput（树入法）—— 移动 Linux 简体拼音输入方案
+    https://github.com/SZYTree0312/Treenput
+
 背景
 ----
 Debian 的 `uim-pinyin` 是空壳 metapackage（只含 /usr/share/doc），没有任何引擎文件。
@@ -12,7 +15,7 @@ Debian 的 `uim-pinyin` 是空壳 metapackage（只含 /usr/share/doc），没�
 本脚本做三件事（纯用户态，不碰内核、不碰系统包）：
   1. 解析 pinyin-big5.scm 的候选表
   2. 用 OpenCC t2s 把候选统一成简体，并顺带做一简对多繁的合并去重
-  3. 按内置词频 + 使用度启发式重排候选，生成 `pinyin-cn-utf8.scm`
+  3. 按词频分层排序候选，生成 `pinyin-cn-utf8.scm`
 
 用法
 ----
@@ -57,7 +60,7 @@ COMMON_BASE = (
     "天去能对小多然于心学么之都好看起发当没成只如事把还用第样道想作种开美总从无情己面最女但现前些所同日"
     "手又行意动方期它头经长儿回位分爱老因很给名法间斯知世什两次使身者被高已亲其进此话常与活正感"
     "见明问力理尔点文几定本公特做外孩相西果走将月十实向声车全信重三机工物气每并别真打太新比才便夫"
-    "再书部水像眼等体却加电主界门利海受听达表万少直代党务原放马史话百政位非 turning"
+    "再书部水像眼等体却加电主界门利海受听达表万少直代党务原放马史话百政位非"
 )
 # 去掉误入的英文并去重
 COMMON_BASE = "".join(ch for ch in COMMON_BASE if "\u4e00" <= ch <= "\u9fff")
@@ -202,11 +205,17 @@ def convert_entry(candidates: list[str], freq: dict[str, int], t2s: T2S) -> list
     return [cand for _, cand in indexed]
 
 
-RULE_TEMPLATE = """;; pinyin-cn-utf8.scm -- 简体拼音引擎（由 build_cn_engine.py 生成，请勿手改）
+RULE_TEMPLATE = """;; pinyin-cn-utf8.scm -- 简体拼音引擎
 ;;
-;; 上游: /usr/share/uim/pinyin-big5.scm (uim-data, XCIN 项目)
-;; 处理: 繁体转简体 (OpenCC t2s) + 过滤假名占位 + 按词频重排
-;; 条目: __COUNT__ 条音节，__TOTAL__ 个候选
+;; 由 Treenput（树入法）生成，请勿手改。
+;;     https://github.com/SZYTree0312/Treenput
+;;     重新生成: python3 engine/build_cn_engine.py \\
+;;         --input /usr/share/uim/pinyin-big5.scm \\
+;;         --output /usr/share/uim/pinyin-cn-utf8.scm --freq data/frequency.txt
+;;
+;; 上游表: /usr/share/uim/pinyin-big5.scm (uim-data, XCIN 项目)
+;; 处理:   繁体转简体 (OpenCC t2s) + 过滤注音/假名占位 + 词频分层排序
+;; 条目:   __COUNT__ 条音节，__TOTAL__ 个候选
 (define pinyin-cn-utf8-rule
   '((BODY)))
 """
@@ -216,7 +225,7 @@ def render(
     table: dict[tuple[str, ...], list[str]],
     freq: dict[str, int],
     t2s: T2S,
-) -> str:
+) -> tuple[str, int, int]:
     blocks: list[str] = []
     total = 0
     for syllable in sorted(table):
@@ -234,7 +243,7 @@ def render(
         .replace("(BODY)", body)
     )
     # uim 表习惯在最后留一个换行
-    return header + "\n"
+    return header + "\n", len(blocks), total
 
 
 def main() -> int:
@@ -270,10 +279,13 @@ def main() -> int:
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render(table, freq, t2s), encoding="utf-8")
+    # 用 render 回传的计数，保证终端输出与文件头注释一致
+    # （table 里的候选数是转换前的，转换后一简对多繁会塌缩，两者不等）
+    text, n_syllable, n_cand = render(table, freq, t2s)
+    out.write_text(text, encoding="utf-8")
 
     print("已生成 %s" % out)
-    print("  音节 %d 条 / 候选 %d 个" % (len(table), sum(len(v) for v in table.values())))
+    print("  音节 %d 条 / 候选 %d 个" % (n_syllable, n_cand))
     if not freq:
         print("  未提供词频文件，仅用内置常用字基线排序（建议加 --freq 提升手感）")
     return 0

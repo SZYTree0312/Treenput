@@ -78,7 +78,9 @@ sed -i "s/dependency('dconf', version: '>= 0.49')/dependency('dconf')/" meson.bu
 
 ### 依赖求解失败：`libgtk-3-dev 依赖 gir1.2-gtk-3.0 (= 3.24.49-3) 但是 ...-mobian1`
 
-Mobian 专有问题，见 `Install.md` 常见问题 A。
+Mobian 专有问题，见 `docs/Manual.md` 常见问题 A。
+`install.sh` 会自动处理：检测到 `-mobian1` 版本就显式降级那2 个包，
+并把原版本号存到 `/root/treenput-gtk3-rollback.txt` 供回滚。
 
 **不要**用 `--allow-change-held-packages` 硬闯，也不要整体`--allow-downgrades`，
 先显式降级那 2 个包，把影响面控制到最小。
@@ -205,4 +207,4 @@ GTK4 / Qt 应用在 phoc 下默认就是 Wayland，通常无需处理。
 | 候选是繁体 | opencc 是否可用；重新生成引擎 |
 | 候选顺序乱 | 是否加了 `--freq` |
 | meson dconf 报错 | 见第二节 |
-| apt 依赖冲突 | 见 Install.md 常见问题 A |
+| apt 依赖冲突 | Mobian GTK3 补丁版冲突，`install.sh` 自动降级；手动见 `docs/Manual.md` 常见问题 A |
