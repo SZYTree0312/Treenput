@@ -1,5 +1,8 @@
 # TroubleShooting
 
+> 装不上先重跑 `install.sh`（幂等），仍失败再看这里对应条目。
+> 安装入口见 [Install.md](../Install.md)。
+
 ## 一、fcitx5 抢占屏幕键盘事故（完整复盘）
 
 这是 Mobian 上中文输入最经典的坑，值得完整记录，因为它有很强的误导性。

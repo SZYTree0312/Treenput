@@ -6,8 +6,10 @@
 #     curl -fsSL https://raw.githubusercontent.com/SZYTree0312/Treenput/main/install.sh | sudo sh
 #     或： git clone <repo> && cd Treenput && sudo ./install.sh
 #
-# 幂等：中途失败可以直接重跑。
-# 不动内核、不换发行版、不装独立 IM 客户端（那会抢占屏幕键盘）。
+# 装完不重启 phosh，当前会话里仍是旧的 phosh-osk-stub（无中文）。
+# 要立刻接管键盘，加 --replace-now。
+# 幂等：中途失败可以直接重跑。不动内核、不换发行版、
+# 不装独立 IM 客户端（那会抢占屏幕键盘）。
 #
 # 选项：
 #   --skip-stevia   只装拼音引擎，跳过 stevia 屏幕键盘的源码编译
@@ -30,7 +32,7 @@ TRAD_CHARS='龍龜電腦這個這樣時間國會學說'
 
 usage() {
     # 从「用法：」到选项列表末尾，行号随注释改动需同步
-    sed -n '5,18s/^#\{1,\} \{0,1\}//p' "$0"
+    sed -n '5,21s/^#\{1,\} \{0,1\}//p' "$0"
 }
 
 # ---------------------------------------------------------------- 输出

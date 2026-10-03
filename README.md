@@ -70,16 +70,16 @@ Debian 维护者已转换过。所以我们不需要重新造词库，只需做�
 
 ## 快速安装
 
-一句命令，把这行丢给 Agent（SSH 已连上设备）：
+安装由 `install.sh` 全权负责，把下面这一行在设备的 SSH 终端里执行即可：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/SZYTree0312/Treenput/main/install.sh | sudo sh
 ```
 
-装完**重启 phosh**（或 `--replace-now` 立刻替换屏幕键盘），点键盘左上角切到拼音模式，
+装完**重启 phosh**（或加 `--replace-now` 立刻接管键盘），点键盘左上角切到拼音模式，
 输 `ni hao` 看是否出「你好」。
 
-选项、常见情况见 **[Install.md](Install.md)**；
+取不到 raw 域名时的备用通道、选项与常见情况见 **[Install.md](Install.md)**；
 手动逐步安装见 **[docs/Manual.md](docs/Manual.md)**。
 
 ---
