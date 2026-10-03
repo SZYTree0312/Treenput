@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+
+# 构建产物
+_build/
+*.scm.tmp
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 系统
+.DS_Store
