@@ -226,15 +226,20 @@ RULE_TEMPLATE = """;; pinyin-cn-utf8.scm -- 简体拼音引擎
 ;; 注意 register-im 内部有 gating：只有当 enabled-im-list 为空、或目标名字
 ;; 已在 enabled-im-list 里，注册才会真正生效。uim 自己的做法也是先把
 ;; enabled-im-list 清空（见 uim-module-manager.scm），这里照做。
-;; 已经在列表里就补注意。
+;; 已经在列表里就跳过，避免重复执行时把列表越堆越长。
 (require "im.scm")
 (require "generic.scm")
 
 (if (not (memq 'cn enabled-im-list))
     (set! enabled-im-list (cons 'cn enabled-im-list)))
 
+;; init-handler 里再 require 一次自己：uim 的 require 带 *xxx-loaded* 标记，
+;; 已加载时是空操作，所以这只是保险 —— uim 若走了 lazy-load，创建 context 时
+;; 这个文件可能还没进过解释器，届时 pinyin-cn-utf8-rule 会是未绑定变量。
+;; pyload.scm 注册 py / pinyin-big5 时也是这么写的。
 (define pinyin-cn-utf8-init-handler
   (lambda (id im arg)
+    (require "pinyin-cn-utf8.scm")
     (generic-context-new id im pinyin-cn-utf8-rule #f)))
 
 (generic-register-im
