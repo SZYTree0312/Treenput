@@ -52,14 +52,27 @@ gsettings set org.gnome.desktop.input-sources sources "[('xkb','us'),('ibus','ui
 
 其余步骤（生成引擎、注册 uim、编译 stevia）都不依赖图形会话，SSH 下能完整装完。
 
-### `--replace-now` 拉不起 stevia
+### `--replace-now` 拉不起 stevia（→ 键盘没了怎么办）
 
-stevia 需要 Wayland input-method slot，SSH 环境下偶尔拉不起来。
-重启 phosh 后在设备终端执行：
+stevia 启动失败时脚本会自动把 `phosh-osk-stub` 拉回来，所以正常不会留下
+无键盘状态。万一键盘还是没了，用这条救回来（不动任何文件）：
 
 ```sh
-phosh-osk-stevia --replace
+sudo ./install.sh --restore-osk
 ```
+
+或者手动：
+
+```sh
+systemd-run --user --unit=phosh-osk-stub-restore \
+  /usr/bin/phosh-osk-stub --allow-replacement
+```
+
+最常见的原因是 **stevia 版本与 phosh 版本不匹配**：stevia 从 v0.56.0 起要求
+合成器提供 `ext_data_control_manager_v1`，而 phosh 0.46 的 phoc 只有老的
+`zwlr_data_control_manager_v1`。缺这个协议时 stevia 会等 5 秒超时退出。
+本项目已把版本锁在 **v0.55.0**（兼容且带中文的最高版本）。
+若你用的是更新的 phosh（≥ 0.49），可用 `TREE_STEVIA_VERSION=v0.57.0` 覆盖。
 
 ### 其他
 
@@ -73,7 +86,8 @@ phosh-osk-stevia --replace
 
 | 选项 | 作用 |
 |------|------|
-| `--replace-now` | 装完立刻停掉 `phosh-osk-stub` 并拉起 stevia |
+| `--replace-now` | 装完立刻停掉 `phosh-osk-stub` 并拉起 stevia。**拉不起来会自动把系统键盘恢复回来** |
+| `--restore-osk` | 只把系统自带键盘（`phosh-osk-stub`）拉起来，不动任何文件。键盘没了就用这条 |
 | `--skip-stevia` | 只装拼音引擎，跳过 stevia 源码编译（省几分钟，但屏幕键盘仍无中文）|
 | `--status` | 只打印当前安装状态 |
 | `--verify-only` | 只跑校验 |

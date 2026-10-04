@@ -16,12 +16,20 @@
 #   --replace-now   装完立即替换当前屏幕键盘（默认只装不换）
 #   --verify-only   只跑校验
 #   --status        只打印当前状态
+#   --restore-osk   只把系统自带屏幕键盘拉起来（键盘没了时用这条救回来）
 #   --uninstall     卸载引擎并恢复原屏幕键盘
 #   -h, --help      显示帮助
 set -eu
 
 REPO_URL="https://github.com/SZYTree0312/Treenput.git"
 STEVIA_URL="https://gitlab.gnome.org/World/Phosh/stevia.git"
+# 版本必须锁在 v0.55.0。
+# stevia 从 v0.56.0 起要求合成器提供 ext_data_control_manager_v1，
+# 而 phoc 0.46（Debian 13 / Mobian）只有老的 zwlr_data_control_manager_v1。
+# 缺这个 global 时 stevia 会等 5 秒超时后退出，屏幕键盘就没了 ——
+# 实测 v0.57.0 在 phosh 0.46 上必定启动失败。v0.55.0 是兼容且带中文的最高版本。
+# 有更新合成器（phosh >= 0.49）时可覆盖：TREE_STEVIA_VERSION=v0.57.0
+STEVIA_VERSION="${TREE_STEVIA_VERSION:-v0.55.0}"
 ENGINE=/usr/share/uim/pinyin-cn-utf8.scm
 UIM_TABLE=/usr/share/uim/pinyin-big5.scm
 STEVIA_SRC=/opt/stevia-src
@@ -252,16 +260,30 @@ register_uim_preload() {
 
 build_stevia() {
     step "构建 stevia 屏幕键盘（首个带中文的 Phosh OSK）"
-    if command -v phosh-osk-stevia >/dev/null 2>&1 && [ ! -d "$STEVIA_SRC/.git" ]; then
+    # 已装的版本不对（比如 0.57 在新 phosh 上会起不来）时也要重编，
+    # 所以这里检查源码树里的版本，而不只是"命令在不在"。
+    if [ -d "$STEVIA_SRC/.git" ]; then
+        _cur="$(git -C "$STEVIA_SRC" describe --tags 2>/dev/null || true)"
+        if [ "$_cur" = "$STEVIA_VERSION" ] && command -v phosh-osk-stevia >/dev/null 2>&1; then
+            info "已装版本 $_cur 与目标一致，跳过编译"
+            return 0
+        fi
+        info "源码树版本 $_cur，目标 $STEVIA_VERSION，重新编译"
+    elif command -v phosh-osk-stevia >/dev/null 2>&1; then
         info "phosh-osk-stevia 已安装，跳过编译"
         return 0
     fi
     command -v meson >/dev/null 2>&1 || die "缺 meson，依赖安装有问题"
     mkdir -p "$(dirname "$STEVIA_SRC")"
     if [ ! -d "$STEVIA_SRC/.git" ]; then
-        git clone --depth 1 "$STEVIA_URL" "$STEVIA_SRC"
+        rm -rf "$STEVIA_SRC"
+        git clone --depth 1 --branch "$STEVIA_VERSION" "$STEVIA_URL" "$STEVIA_SRC"
+    else
+        git -C "$STEVIA_SRC" fetch --depth 1 origin tag "$STEVIA_VERSION" || true
+        git -C "$STEVIA_SRC" checkout "$STEVIA_VERSION" || true
     fi
     cd "$STEVIA_SRC"
+    info "stevia 版本：$(git -C "$STEVIA_SRC" describe --tags 2>/dev/null || echo 未知)"
     # Debian trixie 的 dconf 是 0.40.0，stevia main 要求 >= 0.49。
     # 上游全文只有这一处声明 dconf，放宽不损失能力，已在 arm64 真机验证。
     if grep -q "dependency('dconf', version: '>= 0.49')" meson.build 2>/dev/null; then
@@ -276,28 +298,90 @@ build_stevia() {
     command -v phosh-osk-stevia >/dev/null || warn "phosh-osk-stevia 不在 PATH"
 }
 
+# 拉起系统自带键盘。这是任何时候都能用的安全网 ——
+# 屏幕键盘没了手机就等于不能用，所以恢复动作必须独立于本项目的成败。
+# 用 systemd-run 而不是直接后台起：SSH 一断，直接起的进程就跟着没了。
+restore_osk() {
+    step "恢复系统默认屏幕键盘"
+    if pgrep -f "phosh-osk-stub" >/dev/null 2>&1; then
+        info "phosh-osk-stub 已在运行"
+        return 0
+    fi
+    if [ -z "$DESKTOP_USER" ]; then
+        warn "定位不到桌面用户，无法恢复键盘"
+        return 1
+    fi
+    _uid="$(user_uid "$DESKTOP_USER")"
+    if command -v systemctl >/dev/null 2>&1; then
+        if runuser -u "$DESKTOP_USER" -- env \
+            XDG_RUNTIME_DIR="/run/user/$_uid" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$_uid/bus" \
+            WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" \
+            systemctl --user start phosh-osk-stub-restore 2>/dev/null; then
+            :
+        else
+            runuser -u "$DESKTOP_USER" -- env \
+                XDG_RUNTIME_DIR="/run/user/$_uid" \
+                DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$_uid/bus" \
+                WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" \
+                systemd-run --user --unit=phosh-osk-stub-restore \
+                /usr/bin/phosh-osk-stub --allow-replacement >/dev/null 2>&1 || {
+                warn "systemd-run 拉起失败"
+                return 1
+            }
+        fi
+    fi
+    sleep 3
+    if pgrep -f "phosh-osk-stub" >/dev/null 2>&1; then
+        info "phosh-osk-stub 已恢复"
+        return 0
+    fi
+    warn "未能恢复 phosh-osk-stub"
+    return 1
+}
+
 # stevia 与 osk-stub 抢同一个 Wayland input-method slot，
 # 只用官方支持的 --replace 顶替。
+#
+# 这里的顺序很重要：stevia 会因为协议缺失/版本不匹配而启动失败，
+# 而它一旦失败、osk-stub 又已经被杀掉，手机上就没有任何键盘了。
+# 所以先杀后起、起不来立刻把 stub 拉回来，不留无键盘的中间态。
 replace_osk() {
     step "切换到 stevia 屏幕键盘"
     if pgrep -f phosh-osk-stevia >/dev/null 2>&1; then
         info "stevia 已在运行"
         return 0
     fi
-    if pgrep -f phosh-osk-stub >/dev/null 2>&1; then
-        pkill -f phosh-osk-stub || true
-        info "已停掉 phosh-osk-stub"
-    fi
     if ! command -v phosh-osk-stevia >/dev/null 2>&1; then
-        warn "phosh-osk-stevia 未安装，跳过"
+        warn "phosh-osk-stevia 未安装，键盘维持原样"
         return 0
     fi
-    if [ -n "$DESKTOP_USER" ]; then
-        as_desktop_user phosh-osk-stevia --replace \
-            || warn "拉起 stevia 失败；重启 phosh 后在桌面终端跑 phosh-osk-stevia --replace"
-    else
-        warn "定位不到桌面用户，无法拉起图形进程；重启 phosh 后手动执行 phosh-osk-stevia --replace"
+    if [ -z "$DESKTOP_USER" ]; then
+        warn "定位不到桌面用户，不动键盘（避免留下无键盘状态）"
+        return 0
     fi
+
+    _uid="$(user_uid "$DESKTOP_USER")"
+    pkill -f phosh-osk-stub 2>/dev/null || true
+    info "已停掉 phosh-osk-stub"
+
+    runuser -u "$DESKTOP_USER" -- env \
+        XDG_RUNTIME_DIR="/run/user/$_uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$_uid/bus" \
+        WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" \
+        systemd-run --user --unit=phosh-osk-stevia-replace \
+        phosh-osk-stevia --replace >/dev/null 2>&1 || true
+
+    # stevia 缺协议时是 5 秒超时退出，等 8 秒足够判定
+    sleep 8
+    if pgrep -f phosh-osk-stevia >/dev/null 2>&1; then
+        info "stevia 已接管屏幕键盘"
+        return 0
+    fi
+
+    warn "stevia 启动失败，正在把系统键盘拉回来"
+    restore_osk
+    return 1
 }
 
 # ---------------------------------------------------------------- 输入源
@@ -453,6 +537,7 @@ for arg in "$@"; do
         --verify-only) MODE=verify ;;
         --status)      MODE=status ;;
         --uninstall)   MODE=uninstall ;;
+        --restore-osk) MODE=restore ;;
         -h|--help)     usage; exit 0 ;;
         *) die "未知选项：$arg（-h 看帮助）" ;;
     esac
@@ -472,6 +557,12 @@ case "$MODE" in
     uninstall)
         uninstall
         exit 0
+        ;;
+    restore)
+        # 不动任何系统文件，只把系统自带键盘拉起来。
+        # 屏幕键盘没了手机就没法用，所以这条路径不依赖本项目是否装成功。
+        restore_osk
+        exit $?
         ;;
 esac
 
