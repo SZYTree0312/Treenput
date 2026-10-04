@@ -290,6 +290,26 @@ build_stevia() {
         info "放宽 dconf 版本断言（trixie 实测安全）"
         sed -i "s/dependency('dconf', version: '>= 0.49')/dependency('dconf')/" meson.build
     fi
+
+    # stevia 在 src/completers/pos-completer-uim.c 里硬编码了输入法映射：
+    #     { .id = "cn", .name = "Pinyin", .uim = "py" }        <- 中文走 uim 自带的 py
+    #     { .id = "jp", .name = "Anthy",  .uim = "anthy-utf8" }
+    # 也就是说，即使我们注册了自己的输入法，stevia 默认也只认 "py"，
+    # 我们的词频排序表不会被用上。把这一处改成本项目注册的 "cn" 即可。
+    # 两者都是 generic-context-new + 同格式的 rule 表，替换风险很低；
+    # 不想要这个行为就设 TREE_STEVIA_USE_UPSTREAM_PY=1 保留上游的 py。
+    _uim_src="src/completers/pos-completer-uim.c"
+    if [ -f "$_uim_src" ]; then
+        if [ "${TREE_STEVIA_USE_UPSTREAM_PY:-0}" = "1" ]; then
+            info "保留 stevia 上游的 py 引擎（TREE_STEVIA_USE_UPSTREAM_PY=1）"
+        elif grep -q '\.uim = "py"' "$_uim_src"; then
+            sed -i 's/\.uim = "py"/.uim = "cn"/' "$_uim_src"
+            info "已把 stevia 的中文引擎指向本项目注册的 cn（词频排序表）"
+        fi
+    else
+        warn "未找到 $_uim_src，跳过引擎映射切换（中文将使用 uim 自带的 py）"
+    fi
+
     rm -rf _build
     meson setup -Dgtk_doc=false -Dman=false _build
     ninja -C _build

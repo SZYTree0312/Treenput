@@ -111,6 +111,29 @@ gsettings set org.gnome.desktop.input-sources sources \
 `pinyin-big5`（繁体）。本项目不是从零造拼音引擎，而是
 「自带词频排序的简体表 + 注册成 `cn`」。
 
+### stevia 用哪个引擎是硬编码的（2026-10-04 考证）
+
+读 stevia 0.55.0 的 `src/completers/pos-completer-uim.c`：
+
+```c
+static PosUimInputMethod ims[] = {
+  { .id = "cn", .name = "Pinyin", .uim = "py",         },
+  { .id = "jp", .name = "Anthy",  .uim = "anthy-utf8"  },
+};
+```
+
+**`cn` 被硬编码到 uim 自带的 `py`，不是我们注册的输入法。**
+所以只把 `uim:cn` 写进 input-sources 是不够的 —— stevia 内部的
+「Pinyin」条目走的是 `py`，本项目生成的词频排序表默认用不上。
+
+要让 stevia 用我们的表，把这一处改成 `.uim = "cn"` 重新编译即可。
+两个引擎都是 `generic-context-new` + 同格式的 rule 表
+（`((("n" "i")) ("你" "泥" ...))`），实测格式完全兼容，替换风险低。
+`install.sh` 已内置这一步，可用 `TREE_STEVIA_USE_UPSTREAM_PY=1` 关掉。
+
+判别方法：装完看键盘上的模式名。走 `py` 与走 `cn` 的候选顺序不同
+（我们的表按 `data/frequency.txt` 排）。
+
 ---
 
 ## 路线四：Waydroid / Android 容器 ❌ 方向错误
