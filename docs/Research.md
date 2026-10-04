@@ -87,10 +87,29 @@ gsettings set org.gnome.desktop.input-sources sources \
   "[('xkb','us'), ('ibus','uim:cn')]"
 ```
 
-但 `uim:cn` 需要一个 `cn` 引擎定义和对应的 `pinyin-cn-utf8` 表，
+但 `uim:cn` 需要一个 `cn` 输入法定义和对应的 `pinyin-cn-utf8` 表，
 这两样在任何 Debian/Ubuntu 包里都没有。
 
 **维护者自己承认不读写中文**，这块没有社区保障 —— 这正是我们的切入点。
+
+### 补充考证（2026-10-04，OnePlus 6 / Debian 13 真机）
+
+早期版本以为注册只要写一行 `(named-input-method "cn" "pinyin-cn-utf8")`。
+**这是错的**，已证伪：
+
+- `/usr/share/uim/*.scm` 全文、`libuim.so.8` 符号表里都没有 `named-input-method`；
+  写进配置只会报 `unbound variable`，注册不出任何输入法。
+- Debian 13 的 uim 1:1.9.6 **不带 `uim-proc`**，只有 `uim-sh` 与 `libuim.so.8`。
+  stevia 是直接链接 `libuim.so.8`，不走外部进程。
+- 正确途径是 `generic-register-im`，样板在系统自带的 `pyload.scm`。
+- 还要注意 `register-im` 内部的 gating：`enabled-im-list` 非空时，名字不在列表里的
+  IM 会被**静默丢弃**。uim 自己的 `uim-module-manager.scm` 也是先
+  `(set! enabled-im-list ())` 再注册。
+
+另外纠正一处背景 inaccurate：**uim 本来就自带简体拼音输入法 `py`**
+（pyload.scm 注册的 "New Pinyin (Simplified)"），另有 `pyunihan`、
+`pinyin-big5`（繁体）。本项目不是从零造拼音引擎，而是
+「自带词频排序的简体表 + 注册成 `cn`」。
 
 ---
 

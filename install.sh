@@ -225,12 +225,17 @@ append_once() {
 
 register_uim_preload() {
     step "注册 uim 引擎"
+    # 注册逻辑写在生成的引擎文件里（generic-register-im，见 build_cn_engine.py）。
+    # uim 通过 preload 加载名为 pinyin-cn-utf8 的模块来触发它，
+    # 所以这里只需要把模块名加进 modules 列表。
+    #
+    # Debian trixie 的 uim 不带任何 /etc 文件，/etc/uim 默认不存在。
+    # 早期版本把它包在 [ -d /etc/uim ] 里，导致注册一行都不会写 —— 现在改为
+    # 系统级目录按需创建，并始终写用户级。
+    mkdir -p /etc/uim 2>/dev/null || true
     if [ -d /etc/uim ]; then
         append_once "$PRELOAD_SCM" '(append!olist "modules" "pinyin-cn-utf8")'
         info "已写入 $PRELOAD_SCM"
-        # 输入源切换用的名字放系统 defaults，桌面用户不必额外配置 ~/.uim
-        append_once "$UIM_DEFAULTS" '(named-input-method "cn" "pinyin-cn-utf8")'
-        info "已注册 named-input-method: cn -> pinyin-cn-utf8"
     fi
     # 用户级预载。必须是桌面用户的家，不是 /root。
     if [ -n "$DESKTOP_USER" ]; then
@@ -318,6 +323,7 @@ enable_input_source() {
 
 verify() {
     _rc=0
+    _home="$( [ -n "$DESKTOP_USER" ] && user_home "$DESKTOP_USER" )"
     step "校验"
     if [ -s "$ENGINE" ]; then
         info "引擎文件：$(wc -c <"$ENGINE" | tr -d ' ') 字节  $ENGINE"
@@ -336,6 +342,33 @@ verify() {
     # 抽查首候选（输 ni 出你这类基本体验），用仓库自带的校验器
     if [ -s "$ENGINE" ] && locate_repo && [ -f "$REPO_DIR/engine/verify_engine.py" ]; then
         python3 "$REPO_DIR/engine/verify_engine.py" "$ENGINE" || _rc=1
+    fi
+
+    # 最关键的一项：uim 到底有没有真的注册出名为 cn 的输入法。
+    # 引擎文件在、排序对，都不代表 uim:cn 能用了；注册失败时屏幕上依然没有中文，
+    # 而前面几项全是绿的。所以必须查 uim 自己的运行时登记表。
+    if command -v uim-sh >/dev/null 2>&1; then
+        _im="$(printf '%s\n' \
+            '(require "im.scm")' \
+            '(require "generic.scm")' \
+            '(require "pinyin-cn-utf8.scm")' \
+            '(let ((cnim (retrieve-im (quote cn))))' \
+            '  (print (if cnim' \
+            '            (string-append "FOUND:" (symbol->string (im-name cnim))' \
+            '                           "/" (im-lang cnim))' \
+            '            "MISSING")))' \
+            | HOME="${_home:-/root}" timeout 60 uim-sh 2>/dev/null \
+            | tr -d '\r' | grep -aoE "FOUND:[A-Za-z_/0-9]+|MISSING" | head -1)"
+        if [ "${_im:-}" = "MISSING" ]; then
+            warn "uim 里没有注册出 cn 输入法 —— 屏幕键盘不会有中文"
+            _rc=1
+        elif [ -n "${_im:-}" ]; then
+            info "uim 输入法注册：$_im"
+        else
+            warn "无法确认 cn 是否注册（uim-sh 没返回结果）"
+        fi
+    else
+        warn "无 uim-sh，跳过输入法注册检查"
     fi
 
     if command -v phosh-osk-stevia >/dev/null 2>&1; then

@@ -218,6 +218,32 @@ RULE_TEMPLATE = """;; pinyin-cn-utf8.scm -- 简体拼音引擎
 ;; 条目:   __COUNT__ 条音节，__TOTAL__ 个候选
 (define pinyin-cn-utf8-rule
   '((BODY)))
+
+;; ---- 把规则表注册成 uim 输入法 "cn" ----------------------------------
+;; uim 1.9.6（Debian trixie）里注册输入法的官方途径是 generic-register-im，
+;; 见系统自带模板 /usr/share/uim/pyload.scm（注册 py / pyunihan / pinyin-big5）。
+;;
+;; 注意 register-im 内部有 gating：只有当 enabled-im-list 为空、或目标名字
+;; 已在 enabled-im-list 里，注册才会真正生效。uim 自己的做法也是先把
+;; enabled-im-list 清空（见 uim-module-manager.scm），这里照做。
+;; 已经在列表里就补注意。
+(require "im.scm")
+(require "generic.scm")
+
+(if (not (memq 'cn enabled-im-list))
+    (set! enabled-im-list (cons 'cn enabled-im-list)))
+
+(define pinyin-cn-utf8-init-handler
+  (lambda (id im arg)
+    (generic-context-new id im pinyin-cn-utf8-rule #f)))
+
+(generic-register-im
+ 'cn
+ "zh_CN"
+ "UTF-8"
+ (N_ "Treenput (Simplified)")
+ (N_ "Treenput simplified pinyin input method")
+ pinyin-cn-utf8-init-handler)
 """
 
 

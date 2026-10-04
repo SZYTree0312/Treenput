@@ -90,7 +90,7 @@ phosh-osk-stevia --replace
 |------|------|
 | 1 | `apt` 装构建依赖（uim / OpenCC / GTK3 / meson…），自动处理 Mobian 的 GTK3 版本冲突 |
 | 2 | 从 `uim-data` 的 `pinyin-big5.scm` 生成简体引擎 `/usr/share/uim/pinyin-cn-utf8.scm`，按 `data/frequency.txt` 排序 |
-| 3 | 注册 uim 引擎（系统预载、`named-input-method cn`、桌面用户的 `~/.uim-preload`）|
+| 3 | 注册 uim 引擎：preload 加载模块 `pinyin-cn-utf8`，由引擎文件内的 `generic-register-im` 注册出输入法 `cn`（用户级 + 系统级预载）|
 | 4 | 源码编译安装 **stevia** 屏幕键盘（首个带中文的 Phosh OSK），自动放宽 dconf 版本断言 |
 | 5 | 把 GNOME 输入源设为 `[us, uim:cn]` |
 | 6 | 校验：繁体残留、首候选抽查（输 `ni` 出「你」）|

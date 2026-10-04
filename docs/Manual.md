@@ -80,25 +80,68 @@ opencc批量转换: 可用 (去重后 6231 个汉字)
 
 ## 3. 让 uim 引擎认识新表
 
-uim 通过 `~/.uim-preload` 预载自定义引擎定义。写入：
+uim 通过 `~/.uim-preload` 预载自定义模块。写入：
 
 ```
 ;; ~/.uim-preload
 (append!olist "modules" "pinyin-cn-utf8")
 ```
 
-引擎入口定义（`~/.uim` 或系统级`/etc/uim/defaults`）：
+这会加载 `/usr/share/uim/pinyin-cn-utf8.scm`。**注册代码就在那个文件里**——
+`build_cn_engine.py` 生成规则表时会一并写出注册块，见下方「注册机制」。
+
+### 注册机制（2026-10-04 在 OnePlus 6 / Debian 13 上考证）
+
+早期版本把注册写成 `(named-input-method "cn" "pinyin-cn-utf8")`，
+**这个东西在 uim 里根本不存在**。查证结论：
+
+- 整个 `/usr/share/uim/*.scm` 里没有 `named-input-method` 的定义，
+  `libuim.so.8` 里也搜不到对应符号 —— 写进配置只会让 uim 报
+  `unbound variable`，而**不会注册出任何输入法**。
+- **Debian 13 的 uim 也没有 `uim-proc`**（只有 `uim-sh` 和 `libuim.so.8`），
+  所以旧文档的验证命令 `uim-proc -e cn-inputmethod` 是失效命令。
+
+真正的注册途径是 **`generic-register-im`**，系统自带的
+`/usr/share/uim/pyload.scm` 就是样板（它注册了 `py` / `pyunihan` / `pinyin-big5`）：
 
 ```scheme
-;; 输入法切换用这个名字（对应 stevia 的 ('ibus','uim:cn')）
-(named-input-method "cn" "pinyin-cn-utf8")
+(require "im.scm")
+(require "generic.scm")
+
+;; register-im 内部有 gating：只有 enabled-im-list 为空、或目标名已在列表里，
+;; 注册才会真正生效。uim 自己的做法是注册前先清空（见 uim-module-manager.scm）。
+(if (not (memq 'cn enabled-im-list))
+    (set! enabled-im-list (cons 'cn enabled-im-list)))
+
+(define pinyin-cn-utf8-init-handler
+  (lambda (id im arg)
+    (generic-context-new id im pinyin-cn-utf8-rule #f)))
+
+(generic-register-im
+ 'cn "zh_CN" "UTF-8"
+ (N_ "Treenput (Simplified)")
+ (N_ "Treenput simplified pinyin input method")
+ pinyin-cn-utf8-init-handler)
 ```
 
-验证 uim 能加载：
+顺带一提：uim **本来就自带简体拼音输入法 `py`**（pyload.scm 注册的
+"New Pinyin (Simplified)"），另有 `pyunihan`、`pinyin-big5`（繁体）。
+本项目是自带词频排序的简体表并注册为 `cn`，不是从零造拼音引擎。
+
+### 验证注册是否生效
+
+不要信"文件写了"，要问 uim 自己的运行时登记表：
 
 ```bash
-uim-proc -e cn-inputmethod 2>&1 | head   # 引擎应能启动
+uim-sh <<'SCHEME'
+(require "im.scm")
+(require "generic.scm")
+(require "pinyin-cn-utf8.scm")
+(print (if (retrieve-im 'cn) "FOUND" "MISSING"))
+SCHEME
 ```
+
+返回 `FOUND` 才算真的注册上了。这也是 `install.sh` 最后的校验项之一。
 
 ---
 

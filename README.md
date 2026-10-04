@@ -13,17 +13,28 @@
 
 ## 实测状态
 
-在 OnePlus 6 / Mobian Debian13 / phosh 0.46 / arm64 真机验证：
+**2026-10-04 在 OnePlus 6 / Debian 13 trixie / phosh 0.46 / arm64 真机跑完整安装**：
 
 ```
-音节 1388 条 / 候选 11619 个
-繁体残留 0抽查通过 10/10
-  ni→你   hao→好   zhong→中   guo→国   shi→是
-  ji→机   wo→我   ta→他de→的   yi→一
+==> 生成简体拼音引擎
+opencc批量转换: 可用 (去重后 6202 个汉字)
+  音节 1369 条 / 候选 11190 个
+
+==> 校验
+  繁体残留：0
+  抽查通过 10/10
+    ni→你    hao→好    zhong→中   guo→国    shi→是
+    ji→机    wo→我     ta→他     de→的     yi→一
+  uim 输入法注册：FOUND:cn/zh_CN        <- 关键：uim 真的认到了 cn
 ```
 
-屏幕键盘侧：stevia 0.57.0 源码编译通过（259/259目标），
-`Uim: YES` / `Varnam: YES` / `Hunspell: YES`，上游测试 `ok 1 /pos/completer/uim/object`。
+`Install.md` 那条命令从头跑到尾，退出 0。
+
+**屏幕键盘侧尚未打通**：stevia 0.57.0 在这台机器上启动报
+`Failed to find all Wayland globals, giving up`。已排查：phoc 确实提供了
+`zwp_input_method_manager_v2`、`zwlr_layer_shell_v1`、`phosh_private` 等协议，
+缺的不是协议 global —— 怀疑是 stevia 0.57 与 phosh 0.46 的版本兼容性，
+属于屏幕键盘自身问题，与本项目生成的 uim 引擎无关。见「已知限制」。
 
 ---
 
@@ -86,11 +97,21 @@ curl -fsSL https://raw.githubusercontent.com/SZYTree0312/Treenput/main/install.s
 
 ## 适用范围
 
-- Mobian（Debian 13 / trixie，phosh 0.46）✅ 已实测
+- Mobian（Debian 13 / trixie，phosh 0.46）✅ **引擎侧已真机实测通过**
 - 其他 phosh 发行版（需能装 GTK3 + libhandy-1）
 - 理论上适用于任何能用 uim 作为 IM 引擎的 Wayland 合成器环境
 
 **不适用**：Waydroid / Android 容器（那是 APK 生态，不走 Wayland IM 协议）。
+
+## 已知限制
+
+- **屏幕键盘侧待验证**：stevia 在 phosh 0.46 上启动报
+  `Failed to find all Wayland globals`，怀疑与 stevia 0.57/phosh 0.46 版本适配有关。
+  本项目负责的 uim 引擎侧**已完整跑通**（输入法注册、候选排序、简繁转换全过）。
+- **引擎是单字的**：目前不含词组级输入，`uim` 的 dict 机制可以做，未实现。
+- **词频表是种子集**：`data/frequency.txt` 覆盖高频字，够用但不如真实语料。
+- 本方案**不解决**「独立 IM 抢占屏幕键盘」之外的 APP 触屏问题
+  （那是 XWayland 后端的事，见 `docs/TroubleShooting.md`）。
 
 ---
 

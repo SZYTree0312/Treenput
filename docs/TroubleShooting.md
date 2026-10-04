@@ -137,8 +137,15 @@ gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true
 gsettings get org.gnome.desktop.input-sources sources
 # 应包含 ('ibus', 'uim:cn')
 
-# 2. uim 引擎能否加载
-uim-proc -e cn-inputmethod 2>&1 | head
+# 2. uim 里有没有真的注册出 cn
+#    Debian 13 的 uim 没有 uim-proc（只有 uim-sh 与 libuim.so.8），
+#    旧文档的 uim-proc -e cn-inputmethod 是失效命令。改用：
+uim-sh <<'SCHEME'
+(require "im.scm")
+(require "generic.scm")
+(require "pinyin-cn-utf8.scm")
+(print (if (retrieve-im (quote cn)) "FOUND" "MISSING"))
+SCHEME
 
 # 3. 预载配置是否写了
 cat ~/.uim-preload
