@@ -6,6 +6,10 @@
 *.sh text eol=lf
 install.sh text eol=lf
 
+# 引擎生成器是在设备上执行的 Python，同样强制 LF：
+# CRLF 会让 shebang 行带上 \r，直接执行时报错。
+*.py text eol=lf
+
 # 引擎表是 UTF-8 中文文本，保持 LF 以免 uim 读到 \r
 *.scm text eol=lf
 

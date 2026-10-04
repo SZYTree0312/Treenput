@@ -258,6 +258,43 @@ register_uim_preload() {
 
 # ---------------------------------------------------------------- stevia
 
+# phosh 没有屏幕键盘的 autostart，也没有 systemd unit —— 它是通过 D-Bus name
+# sm.puri.OSK0 拉起键盘的，所以进程被杀不会自己回来，重启之后更是直接回到
+# 系统自带的 phosh-osk-stub（没有中文）。stevia 自带一个 unit，但它缺
+# [Install] 段，装上去也不会随会话启动，这里补一个能 enable 的。
+# 这一步只写桌面用户家目录下的 ~/.config/systemd/user，可随时 disable 撤销。
+enable_stevia_autostart() {
+    [ -n "$DESKTOP_USER" ] || return 0
+    _home="$(user_home "$DESKTOP_USER")"
+    [ -n "$_home" ] || return 0
+    _dir="$_home/.config/systemd/user"
+    _unit="$_dir/phosh-osk-stevia.service"
+    mkdir -p "$_dir"
+    cat > "$_unit" <<'UNIT'
+[Unit]
+Description=Stevia on-screen keyboard (Treenput Chinese input)
+After=gnome-session-initialized.target
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=sm.puri.OSK0
+ExecStart=/usr/local/bin/phosh-osk-stevia --allow-replacement
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=gnome-session-initialized.target
+UNIT
+    chown "$DESKTOP_USER" "$_unit" 2>/dev/null || true
+    as_desktop_user systemctl --user daemon-reload >/dev/null 2>&1 || true
+    if as_desktop_user systemctl --user enable phosh-osk-stevia.service >/dev/null 2>&1; then
+        info "已设置 stevia 随图形会话自动启动（重启后仍是中文键盘）"
+    else
+        warn "未能设置开机自启；重启后需手动执行 phosh-osk-stevia --replace"
+    fi
+}
+
 build_stevia() {
     step "构建 stevia 屏幕键盘（首个带中文的 Phosh OSK）"
     # 已装的版本不对（比如 0.57 在新 phosh 上会起不来）时也要重编，
@@ -310,11 +347,48 @@ build_stevia() {
         warn "未找到 $_uim_src，跳过引擎映射切换（中文将使用 uim 自带的 py）"
     fi
 
+    # 光切换引擎还不够：uim 的 generic 引擎默认是 off（直接输入）模式。
+    # 该模式下按键原样透传、根本不查表，preedit 和候选列表都是空的 ——
+    # 表现就是「键盘明明切到了拼音，却一个汉字都不出」。
+    # generic-proc-off-mode 是靠 Ctrl-E 把自己切回 on 的，可手机屏幕键盘上
+    # 没有能按出 Ctrl-E 的地方。实测：context 建好后立刻 toggle 一次，
+    # cn 马上就能出候选。只对 cn 生效，anthy（jp）不受影响。
+    if [ -f "$_uim_src" ] && ! grep -q "Treenput" "$_uim_src"; then
+        if python3 - "$_uim_src" <<'PYEOF'
+import sys
+
+path = sys.argv[1]
+src = open(path, encoding="utf-8").read()
+anchor = '  g_debug ("Selected: %s", uim_get_current_im_name (self->context));'
+if src.count(anchor) != 1:
+    sys.exit("stevia 源码结构变了，跳过自动打开输入模式的补丁")
+
+patch = anchor + '''
+  /* Treenput: uim's generic engines start in "off" (direct input) mode, where
+     keystrokes are passed through verbatim and no candidates are ever built --
+     the on-screen keyboard then looks switched to Pinyin but yields no Hanzi.
+     There is no hotkey to toggle on a phone, so flip input on right after the
+     context is created. pos_completer_toggle_mode() sends Ctrl-E, which is
+     exactly what generic-proc-off-mode() waits for to turn itself on.
+     A freshly created context is always off, so the toggle is unambiguous. */
+  if (g_str_equal (self->uim->id, "cn"))
+    pos_completer_toggle_mode (POS_COMPLETER (self));
+'''
+open(path, "w", encoding="utf-8").write(src.replace(anchor, patch, 1))
+PYEOF
+        then
+            info "已让 stevia 建好 context 后自动打开中文输入模式"
+        else
+            warn "自动打开输入模式的补丁没打上；若打不出汉字，需在键盘上手动切换模式"
+        fi
+    fi
+
     rm -rf _build
     meson setup -Dgtk_doc=false -Dman=false _build
     ninja -C _build
     ninja -C _build install
     ldconfig
+    enable_stevia_autostart
     command -v phosh-osk-stevia >/dev/null || warn "phosh-osk-stevia 不在 PATH"
 }
 

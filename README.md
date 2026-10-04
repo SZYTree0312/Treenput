@@ -30,6 +30,16 @@ opencc批量转换: 可用 (去重后 6202 个汉字)
 
 `Install.md` 那条命令从头跑到尾，退出 0。
 
+屏幕键盘侧（2026-10-05 补测）：用 stevia 自己的 completer 直接驱动 `cn`，
+**不按任何开关，敲第一个字母就出候选**——
+
+```
+Uim completer inited with engine 'cn'      <- 用的确实是本项目的表
+mode: off -> mode: on                      <- 自动打开输入模式
+[输入 'n']      preedit='嗯'   候选：嗯 唔 那 拿 哪 纳 ...
+[输入 'h','a','o'] preedit='好' 候选：好 蒿 嚆 号 毫 豪 ...
+```
+
 **屏幕键盘侧尚未打通**：stevia 0.57.0 在这台机器上启动报
 `Failed to find all Wayland globals, giving up`。已排查：phoc 确实提供了
 `zwp_input_method_manager_v2`、`zwlr_layer_shell_v1`、`phosh_private` 等协议，

@@ -237,10 +237,18 @@ RULE_TEMPLATE = """;; pinyin-cn-utf8.scm -- 简体拼音引擎
 ;; 已加载时是空操作，所以这只是保险 —— uim 若走了 lazy-load，创建 context 时
 ;; 这个文件可能还没进过解释器，届时 pinyin-cn-utf8-rule 会是未绑定变量。
 ;; pyload.scm 注册 py / pinyin-big5 时也是这么写的。
+;;
+;; 关键：创建完必须立刻 (generic-context-set-on! gc #t)。
+;; uim 的 generic 引擎默认是 off（直接输入）模式 —— 该模式下按键全部原样
+;; 提交、不查表，preedit 与候选列表都是空的，屏幕键盘上表现为「能切到拼音
+;; 却没有任何汉字」。generic-proc-off-mode 里正是用这个函数切回 on 的。
+;; 手机屏幕键盘没有方便的热键去 toggle，所以初始就置为 on。
 (define pinyin-cn-utf8-init-handler
   (lambda (id im arg)
     (require "pinyin-cn-utf8.scm")
-    (generic-context-new id im pinyin-cn-utf8-rule #f)))
+    (let ((gc (generic-context-new id im pinyin-cn-utf8-rule #f)))
+      (generic-context-set-on! gc #t)
+      gc)))
 
 (generic-register-im
  'cn
