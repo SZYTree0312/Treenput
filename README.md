@@ -155,6 +155,56 @@ curl -fsSL https://raw.githubusercontent.com/SZYTree0312/Treenput/main/install.s
 
 **不适用**：Waydroid / Android 容器（那是 APK 生态，不走 Wayland IM 协议）。
 
+## 用户词典：加自己的词 + 长期校准
+
+内置 79,228 条词条来自通用语料（jieba 词频），那是**大众的平均习惯**，不是你的
+——你的名字、地名、口头禅、专业术语它一条都没有，而且你天天打的词在通用词频里
+未必排得靠前。
+
+`treenput-dict` 就是干这个的。数据全在 `~/.config/treenput/`，不动系统文件。
+
+### 加词
+
+```sh
+treenput-dict add "ni hao" 你好     # 拼音 + 词
+treenput-dict addw 你好             # 只给词，自动注音（需 pypinyin）
+treenput-dict apply                 # 生效（自动备份引擎）
+```
+
+你加的词在候选里**排最前**，比内置那 79,228 条都靠前。
+
+### 调频（长期校准）
+
+```sh
+treenput-dict freq 你好 10          # 手动提频（刚发现某个词排太后面时用）
+treenput-dict learn ~/notes.txt     # 从自己的文本批量学
+treenput-dict apply
+```
+
+`learn` 是长期校准的主力：把你平时写的文字喂给它，用词习惯会累积进词频。
+装了 jieba + pypinyin 时还会自动把文本里的高频新词加进词典（没装也能用，
+只校准已有词）。
+
+### 管理与回档
+
+```sh
+treenput-dict list                  # 看已加的词
+treenput-dict rm 你好               # 删词
+treenput-dict status                # 看状态
+```
+
+每次 `apply` 前自动备份引擎到
+`/usr/share/uim/pinyin-cn-utf8.scm.bak-ud-<时间戳>`，改坏了随时能换回来。
+
+### 为什么是增量应用
+
+加一个词**不需要**重跑整表生成。整表生成要解析上游表 + opencc 全量转换，
+手机上太慢；`apply` 只改含用户词的那几行，其余 6 万多条规则原样保留，秒级完成。
+
+> **已知限制**：「你实际选了哪个候选」**不会**自动记录。那需要 uim / stevia
+> 在 C 侧给回调，而本项目是纯用户态的，拿不到选词事件。所以校准目前靠
+> `freq`（手动提频）和 `learn`（批量喂文本）两个入口 —— 想更自动就得动上游 C 代码。
+
 ## 已知限制
 
 - **屏幕键盘侧待验证**：stevia 在 phosh 0.46 上启动报
@@ -178,8 +228,12 @@ Treenput/
 ├── Install.md               安装说明：一句命令 + 选项 + 常见情况
 ├── engine/
 │   ├── build_cn_engine.py     核心：解析上游表 → 生成简体引擎
+│   ├── userdict.py            用户词典 CLI（treenput-dict）：加词 + 词频校准
+│   ├── build_phrase_dict.py   词条生成：jieba 词频 + pypinyin 注音
 │   └── verify_engine.py       校验器：繁体残留 + 首候选抽查
 ├── data/
+│   ├── phrase.txt             词条表（79,228 条，音节+词+词频）
+│   ├── pinyin-cn-utf8.scm     预生成引擎（3.6MB，用户侧免编译）
 │   └── frequency.txt          词频表（每行一词）
 ├── docs/
 │   ├── Manual.md              手动安装步骤（兜底，无网/非 Mobian 时用）

@@ -154,10 +154,28 @@ v1.0.5 补进79,228 条多音节词条，单字候选全部保留。若你的引
 | 3 | 注册 uim 引擎：preload 加载模块 `pinyin-cn-utf8`，由引擎文件内的 `generic-register-im` 注册出输入法 `cn`（用户级 + 系统级预载）|
 | 4 | 源码编译安装 **stevia** 屏幕键盘（首个带中文的 Phosh OSK）：放宽 dconf 版本断言、把中文引擎指向本项目的 `cn`、建好 context 后自动打开中文输入模式、设置随图形会话自启 |
 | 5 | 把 GNOME 输入源设为 `[us, uim:cn]` |
-| 6 | 校验：繁体残留、单字抽查（输 `ni` 含「你」）、词条抽查（`nihao` 含「你好」）|
+| 6 | 装用户词典工具 `treenput-dict` → `/usr/local/bin`，建好 `~/.config/treenput/` |
+| 7 | 校验：繁体残留、单字抽查（输 `ni` 含「你」）、词条抽查（`nihao` 含「你好」）|
 
 全程**不升级内核、不替换发行版、不动系统输入法框架**，不装独立 IM 客户端。
 唯一写入系统目录的是 `/usr/share/uim/pinyin-cn-utf8.scm`（本项目自己的引擎文件）。
+
+## 加自己的词 / 调词频
+
+内置 79,228 条词条来自通用语料，不是你的用词习惯。装完可以加自己的：
+
+```sh
+treenput-dict add "ni hao" 你好     # 加词
+treenput-dict freq 你好 10          # 提频
+treenput-dict learn ~/notes.txt     # 从自己的文本学词频
+treenput-dict apply                 # 生效（自动备份引擎）
+treenput-dict list                  # 看已加的
+```
+
+你加的词在候选里**排最前**，比内置那 79,228 条都靠前。
+数据全在 `~/.config/treenput/`，`apply` 前会自动备份引擎。
+
+完整说明见 [README](README.md)。
 
 ## 手动安装
 

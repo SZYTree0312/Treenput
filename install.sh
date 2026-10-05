@@ -518,6 +518,38 @@ enable_input_source() {
     fi
 }
 
+# ------------------------------------------------------- 用户词典工具
+#
+# 内置词条来自通用语料（jieba 词频），那是「大众的平均习惯」，不是用户自己的：
+# 名字、地名、口头禅、专业术语一条都没有。treenput-dict 让用户加自己的词、
+# 给词调频，数据写在 ~/.config/treenput/。
+#
+# 应用方式是**增量**的：直接改已装的引擎 .scm，只动含用户词的那几行，
+# 其余 6 万多条规则原样保留 —— 加一个词秒级生效，不用重跑整表生成
+# （整表生成要解析上游表 + opencc 全量转换，手机上太慢）。
+install_userdict_tool() {
+    step "安装用户词典工具（treenput-dict）"
+    _src="$REPO_DIR/engine/userdict.py"
+    if [ ! -f "$_src" ]; then
+        warn "仓库里没有 engine/userdict.py，跳过（不影响输入，只是不能加自定义词）"
+        return 0
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        warn "没有 python3，跳过用户词典工具（不影响输入）"
+        return 0
+    fi
+    install -m 0755 "$_src" /usr/local/bin/treenput-dict
+    info "已安装 /usr/local/bin/treenput-dict"
+    # 词典目录必须归桌面用户：CLI 是用户自己在手机上跑的，
+    # root 建的目录用户写不进去。
+    if [ -n "$DESKTOP_USER" ]; then
+        _d="$(user_home "$DESKTOP_USER")/.config/treenput"
+        mkdir -p "$_d"
+        chown -R "$DESKTOP_USER" "$_d" 2>/dev/null || true
+        info "词典目录：$_d"
+    fi
+}
+
 # ---------------------------------------------------------------- 校验
 
 verify() {
@@ -612,6 +644,17 @@ uninstall() {
     step "卸载"
     rm -f "$ENGINE"
     info "已删除引擎 $ENGINE"
+    # 只删命令，不删 ~/.config/treenput —— 那是用户自己攒的词，不能顺手清掉
+    if [ -f /usr/local/bin/treenput-dict ]; then
+        rm -f /usr/local/bin/treenput-dict
+        info "已删除 /usr/local/bin/treenput-dict"
+    fi
+    if [ -n "$DESKTOP_USER" ]; then
+        _ud="$(user_home "$DESKTOP_USER")/.config/treenput"
+        if [ -d "$_ud" ]; then
+            info "保留你的用户词典：$_ud"
+        fi
+    fi
     for f in "$PRELOAD_SCM" "$UIM_DEFAULTS"; do
         if [ -f "$f" ]; then
             sed -i '/pinyin-cn-utf8/d' "$f" || true
@@ -709,6 +752,7 @@ else
     step "跳过 stevia（--skip-stevia）"
 fi
 enable_input_source
+install_userdict_tool
 if [ "$REPLACE_NOW" = 1 ]; then
     replace_osk
 fi
