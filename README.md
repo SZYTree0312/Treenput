@@ -9,8 +9,7 @@
 > 命名说明：起名不蹭任何第三方产品名（不叫 fcitx-pinyin、sogou、mozc 等），
 > 「树入」= 树的输入法，同时是「输入」的谐音双关。
 
-**v1.0.5**（2026-10-05）：补上**多音节词条**（79,228 条），`nihao` 出「你好」；
-并让 **Firefox 等原生 Wayland 应用**能弹屏幕键盘。
+**v1.0.5**（2026-10-05）：补上**多音节词条**（79,228 条），`nihao` 出「你好」。
 
 **v1.0.0**（2026-10-05）：在 OnePlus 6 / Mobian Debian 13 / phosh 0.46 / arm64
 真机上跑通——一条命令装完，重启后仍是中文键盘，打拼音出汉字候选。
@@ -45,21 +44,14 @@ top 80,000，覆盖 97.1% 词频质量）。**单字候选全部保留**，词�
 [after 'o']                  精确命中「你好」
 ```
 
-### 2. Firefox 等原生 Wayland 应用不弹屏幕键盘
+### 2. 引擎预生成
 
-**根因是 IM 协议代差**（已定位，非推测）：
-
-- stevia v0.55.0 只绑定 `zwp_input_method_manager_v2`（input-method v2，
-  只做物理键盘路由），而 phosh 0.46 提供 `zwp_text_input_manager_v3`
-  （text-input v3）——OSK 的 preedit/候选 UI 靠 v3 才显形。这是两个不同协议。
-- Firefox ESR 153 是**原生 Wayland** 应用，直接跟 compositor 谈 v3，绕过了 stevia。
-- 系统应用和终端走 GTK 的 v3 或 XIM，所以不受影响。
-
-**对策**：让 Firefox 退回 XWayland 改走 XIM（`uim-xim` 本来就在跑）。
-只写`~/.local/share/applications/firefox-esr.desktop` 的用户级覆盖，
-**不动系统文件**，删掉即回退。
-
-### 引擎预生成
+> **已知未解决：Firefox 等原生 Wayland 应用不弹屏幕键盘。** 根因是 IM 协议
+> 代差（stevia 只绑 input-method v2，OSK 的 preedit/候选靠 text-input v3；
+> Firefox 原生 Wayland 直接谈 v3 绕过 stevia）。v1.0.5 曾尝试让 Firefox 退回
+> XWayland 走 XIM，**实测无效**（XWayland 下 Firefox 报
+> `Loading IM context type 'xim' failed`），该改动已撤回。详见
+> `docs/TroubleShooting.md`。
 
 `install.sh` 现在**优先安装仓库里的预生成引擎**（`data/pinyin-cn-utf8.scm`），
 用户机器上不需要 Python、不需要 opencc、不需要 jieba/pypinyin，装完即可用。
@@ -168,8 +160,11 @@ curl -fsSL https://raw.githubusercontent.com/SZYTree0312/Treenput/main/install.s
 - **屏幕键盘侧待验证**：stevia 在 phosh 0.46 上启动报
   `Failed to find all Wayland globals`，怀疑与 stevia 0.57/phosh 0.46 版本适配有关。
   本项目负责的 uim 引擎侧**已完整跑通**（输入法注册、候选排序、简繁转换全过）。
-- **引擎是单字的**：目前不含词组级输入，`uim` 的 dict 机制可以做，未实现。
-- **词频表是种子集**：`data/frequency.txt` 覆盖高频字，够用但不如真实语料。
+- **Firefox 等原生 Wayland 应用不弹屏幕键盘**：IM 协议代差所致，已知未解决；
+  退回 XWayland 走 XIM 的尝试已实测证伪。建议改用 GTK 系浏览器。
+  详见 `docs/TroubleShooting.md`。
+- **词频来自通用语料**：`data/phrase.txt` 用的是 jieba 通用词频，
+  不是你自己的用词习惯。个人词条与调频见「用户词典」一节。
 - 本方案**不解决**「独立 IM 抢占屏幕键盘」之外的 APP 触屏问题
   （那是 XWayland 后端的事，见 `docs/TroubleShooting.md`）。
 

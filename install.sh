@@ -277,46 +277,6 @@ register_uim_preload() {
     fi
 }
 
-# ------------------------------------------------- 原生 Wayland 应用兼容
-#
-# 现象：Firefox 里点输入框不弹屏幕键盘，系统应用和终端却正常。
-#
-# 原因（已定位，非推测）：stevia v0.55.0 只绑定 zwp_input_method_manager_v2
-# （input-method v2，只做物理键盘路由），而 phosh 0.46 提供的是
-# zwp_text_input_manager_v3（text-input v3）—— 两个不同的协议，OSK 的
-# preedit/候选 UI 靠 v3 才显形。Firefox ESR 是原生 Wayland 应用，直接跟
-# compositor 谈 v3，于是绕过 stevia；系统应用/终端走 GTK 的 v3 或 XIM，
-# 不受影响。
-#
-# 对策：让 Firefox 退回 XWayland，改走 XIM（uim-xim 在跑）。
-# 只写 ~/.local/share/applications/ 的用户级覆盖，不动系统文件，
-# 删掉这个文件即回退。
-setup_firefox_xim() {
-    step "配置 Firefox 走 XIM（否则文本框不弹屏幕键盘）"
-    if [ -z "$DESKTOP_USER" ]; then
-        warn "定位不到桌面用户，跳过 Firefox 配置"
-        return 0
-    fi
-    _home="$(user_home "$DESKTOP_USER")"
-    [ -n "$_home" ] || return 0
-    _sys=/usr/share/applications/firefox-esr.desktop
-    _user="$_home/.local/share/applications/firefox-esr.desktop"
-    if [ ! -f "$_sys" ]; then
-        info "本机没有 firefox-esr.desktop，跳过"
-        return 0
-    fi
-    mkdir -p "$(dirname "$_user")"
-    # 只改 Exec= 一行；用户想恢复原生 Wayland 直接删掉这个覆盖文件
-    sed 's|^Exec=|Exec=env MOZ_ENABLE_WAYLAND=0 |' "$_sys" > "$_user"
-    chown -R "$DESKTOP_USER" "$(dirname "$_user")" 2>/dev/null || true
-    if grep -q 'MOZ_ENABLE_WAYLAND=0' "$_user"; then
-        info "已写入 $_user"
-        info "  恢复方式: rm $_user"
-    else
-        warn "生成 $_user 时未匹配到 Exec= 行，Firefox 可能仍走原生 Wayland"
-    fi
-}
-
 # ---------------------------------------------------------------- stevia
 
 # phosh 没有屏幕键盘的 autostart，也没有 systemd unit —— 它是通过 D-Bus name
@@ -674,11 +634,14 @@ uninstall() {
     if [ -n "$DESKTOP_USER" ]; then
         as_desktop_user gsettings set org.gnome.desktop.input-sources sources \
             "[('xkb', 'us')]" 2>/dev/null || true
-        # 删掉 Firefox 的用户级 XIM 覆盖，恢复原生 Wayland
+        # 清理 v1.0.5 遗留的 Firefox XIM 覆盖。
+        # 那版曾给 Firefox 写过 MOZ_ENABLE_WAYLAND=0，但实测无效
+        # （XWayland 下 Firefox 报 Loading IM context type 'xim' failed），
+        # 现已不再写入。这里只负责把装过旧版的人机器上的残留删掉。
         _ff="$(user_home "$DESKTOP_USER")/.local/share/applications/firefox-esr.desktop"
         if [ -f "$_ff" ] && grep -q 'MOZ_ENABLE_WAYLAND=0' "$_ff"; then
             rm -f "$_ff"
-            info "已删除 Firefox XIM 覆盖 $_ff"
+            info "已删除 v1.0.5 遗留的 Firefox 覆盖 $_ff"
         fi
     fi
     info "完成。stevia 是源码安装（ninja install），没有 apt 包名；"
@@ -746,7 +709,6 @@ else
     step "跳过 stevia（--skip-stevia）"
 fi
 enable_input_source
-setup_firefox_xim
 if [ "$REPLACE_NOW" = 1 ]; then
     replace_osk
 fi

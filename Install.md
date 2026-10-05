@@ -79,22 +79,26 @@ systemd-run --user --unit=phosh-osk-stub-restore \
 
 ### Firefox 等应用里点输入框不弹屏幕键盘
 
-**这是 v1.0.5 修的。** 根因是 IM 协议代差：
+**已知未解决，不要再去试 XIM 那条路。** 根因是 IM 协议代差：
 
 stevia 只绑定 `zwp_input_method_manager_v2`（物理键盘路由），而 phosh 0.46 提供
 `zwp_text_input_manager_v3`（OSK 的 preedit/候选 UI 靠它显形）—— 两个不同的协议。
 **Firefox ESR 是原生 Wayland 应用**，直接跟 compositor 谈 v3，绕过了 stevia；
 而系统应用和终端走 GTK 的 v3 或 XIM，所以它们正常。
 
-`install.sh` 会给 Firefox 写一个用户级覆盖，让它退回 XWayland 改走 XIM
-（`uim-xim` 本来就在跑）。想恢复 Firefox 原生 Wayland，删掉这个文件即可：
+v1.0.5 曾给 Firefox 写过 `MOZ_ENABLE_WAYLAND=0` 的用户级覆盖想让它退回
+XWayland 走 XIM，**实测无效**：XWayland 下 Firefox 直接报
+`Loading IM context type 'xim' failed`。该改动已撤回，`install.sh` 不再写入。
+
+装过 v1.0.5 的机器上会留下这个文件，删掉即可：
 
 ```sh
 rm ~/.local/share/applications/firefox-esr.desktop
 ```
 
-> 这会让 Firefox 走 XWayland。XWayland 下滚动、动画等原生 Wayland 特性会略有
-> 差异，介意的话就用别的浏览器，或等 stevia 支持 text-input v3。
+要根治只能让 stevia 支持 text-input v3（上游改动，非本项目范围）。
+当前的实用选择是**用 GTK 系浏览器**（Epiphany 等）——GTK 同时走 v3 和
+IM module，能正常弹键盘。
 
 ### 能切到拼音模式，但一个汉字都不出
 
@@ -150,8 +154,7 @@ v1.0.5 补进79,228 条多音节词条，单字候选全部保留。若你的引
 | 3 | 注册 uim 引擎：preload 加载模块 `pinyin-cn-utf8`，由引擎文件内的 `generic-register-im` 注册出输入法 `cn`（用户级 + 系统级预载）|
 | 4 | 源码编译安装 **stevia** 屏幕键盘（首个带中文的 Phosh OSK）：放宽 dconf 版本断言、把中文引擎指向本项目的 `cn`、建好 context 后自动打开中文输入模式、设置随图形会话自启 |
 | 5 | 把 GNOME 输入源设为 `[us, uim:cn]` |
-| 6 | 给 Firefox 写用户级 XIM 覆盖（`MOZ_ENABLE_WAYLAND=0`），修原生 Wayland 下不弹键盘 |
-| 7 | 校验：繁体残留、单字抽查（输 `ni` 含「你」）、词条抽查（`nihao` 含「你好」）|
+| 6 | 校验：繁体残留、单字抽查（输 `ni` 含「你」）、词条抽查（`nihao` 含「你好」）|
 
 全程**不升级内核、不替换发行版、不动系统输入法框架**，不装独立 IM 客户端。
 唯一写入系统目录的是 `/usr/share/uim/pinyin-cn-utf8.scm`（本项目自己的引擎文件）。

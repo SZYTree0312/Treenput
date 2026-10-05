@@ -254,32 +254,33 @@ grep -o '((("n" "i" "h" "a" "o")) ("[^"]*"' /usr/share/uim/pinyin-cn-utf8.scm
 
 **症状**：系统应用和终端里点输入框能弹键盘，Firefox 里不能。
 
-**根因是 IM 协议代差**（已定位）：
+**已知未解决。** 根因是 IM 协议代差（已定位，非推测）：
 
 - stevia v0.55.0 只绑定 `zwp_input_method_manager_v2`（input-method v2，
   只做物理键盘路由），而 phosh 0.46 提供 `zwp_text_input_manager_v3`
   （text-input v3）——OSK 的 preedit/候选 UI 靠 v3 才显形。这是两个不同协议。
+  实测 `strings phosh-osk-stevia | grep -c zwp_text_input_manager_v3` = **0**。
 - Firefox ESR 153 是**原生 Wayland**应用，直接跟 compositor 谈 v3，绕过 stevia。
 - 系统应用/终端走 GTK 的 v3 或 XIM，所以不受影响。
 
-确认协议：
+**已试过且证伪的路（别再试）**：让 Firefox 退回 XWayland 走 XIM
+（`MOZ_ENABLE_WAYLAND=0` + `GTK_IM_MODULE=xim`）。XIM 通路本身是通的
+（用 C 探针验过 `@im=uim` / `@im=cn` / `@im=uim:cn` 都能连上），但 Firefox 自己
+加载不了 XIM context：
 
-```bash
-pgrep -a uim-xim                # XIM 应在跑
-echo $MOZ_ENABLE_WAYLAND        # 1 = 原生 Wayland，会绕过 stevia
-ls /usr/lib/*/gtk-3.0/*/immodules/im-xim.so   # GTK 的 XIM 模块
+```
+Gtk-WARNING: Loading IM context type 'xim' failed
 ```
 
-解法：让 Firefox 退回 XWayland 走 XIM。`install.sh` 会写
-`~/.local/share/applications/firefox-esr.desktop`，只改 `Exec=` 加
-`MOZ_ENABLE_WAYLAND=0`。删掉该文件即恢复原生 Wayland。
+且 GTK 的 `im-uim.so` 里也不含 text-input v3。所以这条路是**协议全链断裂**，
+不是配置项能修的。v1.0.5 曾写入该覆盖，现已撤回。
 
-> 代价：Firefox 在 XWayland 下滚动、动画等原生 Wayland 特性略有差异。
-> 根治要等 stevia 支持 text-input v3。
+要根治只能给 stevia 加 text-input v3 支持（上游 C 侧改动）。当前实用选择是
+**用 GTK 系浏览器**（Epiphany 等）——GTK 同时走 v3 和 IM module，能正常弹键盘。
 
 ### 快速诊断清单补充
 
 | 症状 | 首查 |
 |------|------|
 | 只有单字没有词 | 引擎是否含词条（见上）；`grep -c '^    ((('` |
-| Firefox 里不弹键盘 | `echo $MOZ_ENABLE_WAYLAND`；设 `MOZ_ENABLE_WAYLAND=0` |
+| Firefox 里不弹键盘 | **已知未解决**（协议代差），改用 GTK 系浏览器 |

@@ -300,10 +300,30 @@ Firefox ESR 153 是原生 Wayland 应用，直接跟 compositor 谈 text-input v
 GTK 会同时用 v3 和 IM module（`im-wayland.so` / `im-xim.so` 都在），
 所以不受影响。
 
-### 对策
+### 试过的对策：XWayland + XIM（已证伪）
 
-让 Firefox 退回 XWayland 走 XIM（`uim-xim` 本来就在跑）。
-只写 `~/.local/share/applications/` 的用户级 desktop 覆盖，不动系统文件。
+v1.0.5 曾让 Firefox 退回 XWayland 走 XIM（`MOZ_ENABLE_WAYLAND=0` +
+`GTK_IM_MODULE=xim`，`uim-xim` 本来就在跑）。**实测无效，已撤回。**
 
-根治要等 stevia 支持 text-input v3 —— 那是 C 图形栈的活，
-对一个输入法项目来说改动面过大，且无法回退。
+证伪过程：
+
+1. **XIM 通路本身是通的。** 写了个 C 探针直接 `XOpenIM`，
+   `@im=uim` / `@im=cn` / `@im=uim:cn` 三种 LOCALE 全部连接成功。
+   所以问题不在 uim 侧。
+2. **Firefox 自己加载不了 XIM context。** XWayland 下启动报：
+   ```
+   Gtk-WARNING: Loading IM context type 'xim' failed
+   ```
+3. **GTK 的 uim 模块也不含 v3。** `strings im-uim.so` 里没有 text-input v3 符号。
+4. **stevia 完全不绑 v3。** `strings phosh-osk-stevia | grep -c zwp_text_input_manager_v3` = 0。
+
+结论：这条链是**协议全链断裂**，不是某个配置项能修的 —— 即便 XIM 连得上，
+OSK 的候选 UI 也拿不到 v3 事件。
+
+### 剩下两条路
+
+- **A（根治）**：给 stevia 加 text-input v3 支持。C 图形栈改动，面大且难回退。
+- **B（绕开）**：用 GTK 系浏览器（Epiphany 等）。GTK 同时走 v3 和 IM module，
+  实测能正常弹键盘。
+
+当前按 B 处理，Firefox 记为已知限制。
