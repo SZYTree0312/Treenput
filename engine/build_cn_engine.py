@@ -22,9 +22,20 @@ Debian 的 `uim-pinyin` 是空壳 metapackage（只含 /usr/share/doc），没�
   python3 build_cn_engine.py \
       --input  /usr/share/uim/pinyin-big5.scm \
       --output /usr/share/uim/pinyin-cn-utf8.scm \
-      [--freq data/frequency.txt]
+      [--freq data/frequency.txt] [--phrase data/phrase.txt]
 
-`--input` 可以是任意 uim 拼音表；`--freq` 是可选的词频文件（每行一个词）。
+`--input` 可以是任意 uim 拼音表；`--freq` 是可选的词频文件（每行一个词）；
+`--phrase` 是 build_phrase_dict.py 产出的词条表（音节 + 词 + 词频）。
+
+为什么需要 --phrase
+-------------------
+上游表（以及 uim 自带的 py.scm / pyunihan.scm）经审计**全是单音节->单字**，
+没有任何多字词条。于是输入 `nihao` 时，`ni` 精确命中后候选里没有「你好」，
+用户只能拿到「你」，再输 `h` 就断 —— 表现为「打完一个汉字就锁死、没有联想」。
+
+uim 的 rk 引擎本身支持多音节键（表里 `hao` 就是 ("h" "a" "o")），最长前缀
+匹配，只是没人往表里放词。--phrase 就是把这些词填进去。词条会排在同音节
+单字候选**前面**，这样「你好」先于「你妮泥尼」出现。
 """
 from __future__ import annotations
 
@@ -72,33 +83,56 @@ class T2S:
 
     逐条调用 opencc 会有上千次进程启动开销（实测超时），所以先把所有待转
     字符去重成一批，一次性喂给 opencc，再从结果里查表。
+
+    两种后端：
+      -命令行 `opencc`（Debian 上由apt 装，最稳）
+      - Python 模块 `opencc`（opencc-python-reimplemented，跨平台）
+    命令行不存在时自动回退到模块；都没有就保持原样（仍能生成，只是繁体残留）。
     """
 
     def __init__(self) -> None:
         self._map: dict[str, str] = {}
         self._ok = False
+        self._backend = "none"
 
     def warm(self, chars: set[str]) -> None:
         todo = sorted(c for c in chars if c and BOGUS_CHARS.search(c) is None)
         if not todo:
             self._ok = True
+            self._backend = "noop"
             return
         payload = "".join(todo)
+
+        # 优先用模块：跨平台，且省掉进程启动
         try:
-            out = subprocess.run(
-                ["opencc", "-c", "t2s.json"],
-                input=payload,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        except (OSError, subprocess.SubprocessError):
+            import opencc as _pyopencc  # type: ignore
+
+            conv = _pyopencc.OpenCC("t2s")
+            converted = conv.convert(payload)
+            self._backend = "python-module"
+        except Exception:
+            converted = None
+
+        if converted is None:
+            try:
+                out = subprocess.run(
+                    ["opencc", "-c", "t2s.json"],
+                    input=payload,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                if out.returncode == 0:
+                    converted = out.stdout.strip()
+                    self._backend = "cli"
+            except (OSError, subprocess.SubprocessError):
+                converted = None
+
+        if converted is None:
             return
-        if out.returncode != 0:
-            return
-        converted = out.stdout.strip()
         # opencc 是一一映射，长度应一致；不一致就放弃转换而不是错位
         if len(converted) != len(payload):
+            self._backend = "none"
             return
         self._map = dict(zip(todo, converted))
         self._ok = True
@@ -183,9 +217,14 @@ def score_candidate(cand: str, freq: dict[str, int]) -> int:
 
 
 def convert_entry(candidates: list[str], freq: dict[str, int], t2s: T2S) -> list[str]:
-    """把一条候选转成简体、去占位符、合并同字、按使用度重排。"""
+    """把一条候选转成简体、去占位符、合并同字、按使用度重排。
+
+    词条（多字候选）恒定排在单字之前：它们按词频已经排好序，
+    再交给 score_candidate 会被判成 0 分压到末尾，所以这里单独留head。
+    """
     simplified: list[str] = []
     seen: set[str] = set()
+    head: list[str] = []          # 已确定优先的多字词条
     for cand in candidates:
         # 纯注音/假名/符号占位直接丢
         if BOGUS_CHARS.search(cand):
@@ -197,12 +236,86 @@ def convert_entry(candidates: list[str], freq: dict[str, int], t2s: T2S) -> list
             # 一简对多繁时多个繁体会塌缩成同一个简体，合并即可
             continue
         seen.add(conv)
-        simplified.append(conv)
+        if len(conv) >= 2:
+            head.append(conv)
+        else:
+            simplified.append(conv)
 
     # 稳定排序：分数高的在前，同分保持上游原始顺序
     indexed = list(enumerate(simplified))
     indexed.sort(key=lambda pair: (-score_candidate(pair[1], freq), pair[0]))
-    return [cand for _, cand in indexed]
+    return head + [cand for _, cand in indexed]
+
+
+def load_phrases(path: Path | None) -> dict[tuple[str, ...], list[tuple[str, int]]]:
+    """读取词条表 -> {键元组: [(词, 词频), ...]按词频降序}。
+
+    词条表格式（每行）：`ni hao<TAB>你好<TAB>59317`
+    空行与 # 开头的行忽略。
+
+    键的表示法必须与上游表一致：上游 `pinyin-big5.scm` 的键是**逐字母**的
+    （`"a" "i"` = 先按 a 再按 i 两键），所以词条 `ni hao` 必须展成
+    `("n","i","h","a","o")`。若图省事写成 `("ni","hao")`，uim 会把它当成
+    按「ni」「hao」这种非法键，词条永远匹配不上 —— 这是实测踩过的坑。
+    """
+    out: dict[tuple[str, ...], list[tuple[str, int]]] = defaultdict(list)
+    if path is None or not path.exists():
+        return out
+    for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+        line = line.rstrip('\n')
+        if not line or line.startswith('#'):
+            continue
+        parts = line.split('\t')
+        if len(parts) < 2:
+            continue
+        syllables = [p.strip().lower() for p in parts[0].split() if p.strip()]
+        word = parts[1].strip()
+        if not syllables or not word:
+            continue
+        try:
+            freq = int(parts[2]) if len(parts) > 2 else 0
+        except ValueError:
+            freq = 0
+        # 展平成逐字母，与上游表同构
+        keys: list[str] = []
+        for syl in syllables:
+            keys.extend(syl)
+        out[tuple(keys)].append((word, freq))
+    # 词频降序；同频次按词长升序（短词优先，占用更少按键）
+    for syl in out:
+        out[syl].sort(key=lambda wf: (-wf[1], len(wf[0])))
+    return out
+
+
+def merge_phrases(
+    table: dict[tuple[str, ...], list[str]],
+    phrases: dict[tuple[str, ...], list[tuple[str, int]]],
+) -> int:
+    """把词条并进规则表。
+
+    键已经是逐字母（见 load_phrases），与单字表键**同构**，所以能直接落进
+    同一个桶：
+
+      - `("n","i")` 桶 -> 「你好」「你们」... 排在「你 妮 泥」**前面**
+      - `("n","i","h","a","o")` 是**新桶** -> 只有「你好」
+        这是 rk 最长前缀匹配起作用的地方：输到 `nih` 时引擎就会提示
+        「你好+ao」，输完 `nihao` 精确命中。
+    """
+    added = 0
+    for syllables, words in phrases.items():
+        bucket = table.setdefault(syllables, [])
+        existing = set(bucket)
+        head: list[str] = []
+        for word, _freq in words:
+            if word in existing:
+                continue
+            existing.add(word)
+            head.append(word)
+        if head:
+            # 词在前，单字在后
+            table[syllables] = head + bucket
+            added += len(head)
+    return added
 
 
 RULE_TEMPLATE = """;; pinyin-cn-utf8.scm -- 简体拼音引擎
@@ -211,10 +324,12 @@ RULE_TEMPLATE = """;; pinyin-cn-utf8.scm -- 简体拼音引擎
 ;;     https://github.com/SZYTree0312/Treenput
 ;;     重新生成: python3 engine/build_cn_engine.py \\
 ;;         --input /usr/share/uim/pinyin-big5.scm \\
-;;         --output /usr/share/uim/pinyin-cn-utf8.scm --freq data/frequency.txt
+;;         --output /usr/share/uim/pinyin-cn-utf8.scm \\
+;;         --freq data/frequency.txt --phrase data/phrase.txt
 ;;
 ;; 上游表: /usr/share/uim/pinyin-big5.scm (uim-data, XCIN 项目)
 ;; 处理:   繁体转简体 (OpenCC t2s) + 过滤注音/假名占位 + 词频分层排序
+;; 词条:   __PHRASE__ 条多音节词（jieba词频 + pypinyin，见engine/build_phrase_dict.py）
 ;; 条目:   __COUNT__ 条音节，__TOTAL__ 个候选
 (define pinyin-cn-utf8-rule
   '((BODY)))
@@ -264,6 +379,7 @@ def render(
     table: dict[tuple[str, ...], list[str]],
     freq: dict[str, int],
     t2s: T2S,
+    n_phrase: int = 0,
 ) -> tuple[str, int, int]:
     blocks: list[str] = []
     total = 0
@@ -279,6 +395,7 @@ def render(
     header = (
         RULE_TEMPLATE.replace("__COUNT__", str(len(blocks)))
         .replace("__TOTAL__", str(total))
+        .replace("__PHRASE__", str(n_phrase))
         .replace("(BODY)", body)
     )
     # uim 表习惯在最后留一个换行
@@ -294,6 +411,8 @@ def main() -> int:
     )
     ap.add_argument("--output", required=True, help="输出的 .scm 路径")
     ap.add_argument("--freq", default=None, help="可选词频文件，每行一词")
+    ap.add_argument("--phrase", default=None,
+                    help="可选词条文件（build_phrase_dict.py 产物）")
     args = ap.parse_args()
 
     src = Path(args.input)
@@ -307,6 +426,17 @@ def main() -> int:
         return 1
     freq = load_frequency(Path(args.freq) if args.freq else None)
 
+    # 词条必须在 t2s.warm 之前并进表：这样所有汉字（含词条里的）都能被
+    # 一次性收集去做繁->简转换。
+    n_phrase = 0
+    if args.phrase:
+        phrases = load_phrases(Path(args.phrase))
+        n_phrase = merge_phrases(table, phrases)
+        print("词条: %d 条并入规则表（涉及 %d 个音节）"
+              % (n_phrase, len(phrases)))
+    else:
+        print("未提供词条文件：只有单字候选，输入多音节词会中断（见 --phrase）")
+
     # 先把所有候选里出现过的汉字收集起来，一次性做繁->简转换
     t2s = T2S()
     all_chars: set[str] = set()
@@ -314,17 +444,18 @@ def main() -> int:
         for cand in cands:
             all_chars.update(cand)
     t2s.warm(all_chars)
-    print("opencc批量转换: %s (去重后 %d 个汉字)" % ("可用" if t2s._ok else "不可用，回退原样", len(t2s._map)))
+    print("opencc批量转换: %s (去重后 %d 个汉字)"
+          % (t2s._backend if t2s._ok else "不可用，回退原样", len(t2s._map)))
 
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     # 用 render 回传的计数，保证终端输出与文件头注释一致
     # （table 里的候选数是转换前的，转换后一简对多繁会塌缩，两者不等）
-    text, n_syllable, n_cand = render(table, freq, t2s)
+    text, n_syllable, n_cand = render(table, freq, t2s, n_phrase)
     out.write_text(text, encoding="utf-8")
 
     print("已生成 %s" % out)
-    print("  音节 %d 条 / 候选 %d 个" % (n_syllable, n_cand))
+    print("  音节 %d 条 / 候选 %d 个（其中多字词 %d 个）" % (n_syllable, n_cand, n_phrase))
     if not freq:
         print("  未提供词频文件，仅用内置常用字基线排序（建议加 --freq 提升手感）")
     return 0

@@ -205,19 +205,40 @@ ensure_repo() {
 # ---------------------------------------------------------------- 引擎
 
 build_engine() {
-    step "生成简体拼音引擎"
+    step "安装简体拼音引擎"
     ensure_repo
-    [ -f "$UIM_TABLE" ] || die "找不到上游拼音表 $UIM_TABLE（uim-data 装上了吗）"
+    _prebuilt="$REPO_DIR/data/pinyin-cn-utf8.scm"
+    _phrase="$REPO_DIR/data/phrase.txt"
     _freq="$REPO_DIR/data/frequency.txt"
+
+    # 优先用仓库里的预生成引擎：用户机器上不需要 Python、不需要 opencc、
+    # 也不需要 jieba/pypinyin，装完即可用。这是 1.1.0 起的默认路径。
+    if [ -s "$_prebuilt" ]; then
+        install -m 0644 "$_prebuilt" "$ENGINE" || die "引擎文件安装失败：$ENGINE"
+        local _pc
+        _pc=$(grep -c '^\s*((\(' "$ENGINE" 2>/dev/null || echo 0)
+        info "已安装预生成引擎 $_prebuilt -> $ENGINE"
+        info "  规则条目 $_pc 条（含多音节词条）"
+        return 0
+    fi
+
+    # 回退：现场从上游表生成。
+    # 注意这条路径需要 python3；繁简转换优先用 opencc 命令，其次 Python 模块。
+    warn "仓库内无data/pinyin-cn-utf8.scm，改为现场生成（需要 python3）"
+    [ -f "$UIM_TABLE" ] || die "找不到上游拼音表 $UIM_TABLE（uim-data 装上了吗）"
+    set -- --input "$UIM_TABLE" --output "$ENGINE"
+    [ -f "$_phrase" ] && set -- "$@" --phrase "$_phrase"
     if [ -f "$_freq" ]; then
-        python3 "$REPO_DIR/engine/build_cn_engine.py" \
-            --input "$UIM_TABLE" --output "$ENGINE" --freq "$_freq"
+        set -- "$@" --freq "$_freq"
     else
         warn "仓库内无 data/frequency.txt，退化为内置基线排序"
-        python3 "$REPO_DIR/engine/build_cn_engine.py" \
-            --input "$UIM_TABLE" --output "$ENGINE"
     fi
+    python3 "$REPO_DIR/engine/build_cn_engine.py" "$@" \
+        || die "引擎生成失败：$ENGINE"
     [ -s "$ENGINE" ] || die "引擎文件生成失败：$ENGINE"
+    if [ ! -f "$_phrase" ]; then
+        warn "未找到 data/phrase.txt：只有单字候选，多音节词会中断"
+    fi
 }
 
 # 向文件追加一行，已存在则跳过。文件不存在则创建。
@@ -253,6 +274,46 @@ register_uim_preload() {
         info "已写入 $_target （用户 $DESKTOP_USER）"
     else
         warn "定位不到桌面用户，跳过 ~/.uim-preload；引擎仍可用，只是少一条预载"
+    fi
+}
+
+# ------------------------------------------------- 原生 Wayland 应用兼容
+#
+# 现象：Firefox 里点输入框不弹屏幕键盘，系统应用和终端却正常。
+#
+# 原因（已定位，非推测）：stevia v0.55.0 只绑定 zwp_input_method_manager_v2
+# （input-method v2，只做物理键盘路由），而 phosh 0.46 提供的是
+# zwp_text_input_manager_v3（text-input v3）—— 两个不同的协议，OSK 的
+# preedit/候选 UI 靠 v3 才显形。Firefox ESR 是原生 Wayland 应用，直接跟
+# compositor 谈 v3，于是绕过 stevia；系统应用/终端走 GTK 的 v3 或 XIM，
+# 不受影响。
+#
+# 对策：让 Firefox 退回 XWayland，改走 XIM（uim-xim 在跑）。
+# 只写 ~/.local/share/applications/ 的用户级覆盖，不动系统文件，
+# 删掉这个文件即回退。
+setup_firefox_xim() {
+    step "配置 Firefox 走 XIM（否则文本框不弹屏幕键盘）"
+    if [ -z "$DESKTOP_USER" ]; then
+        warn "定位不到桌面用户，跳过 Firefox 配置"
+        return 0
+    fi
+    _home="$(user_home "$DESKTOP_USER")"
+    [ -n "$_home" ] || return 0
+    _sys=/usr/share/applications/firefox-esr.desktop
+    _user="$_home/.local/share/applications/firefox-esr.desktop"
+    if [ ! -f "$_sys" ]; then
+        info "本机没有 firefox-esr.desktop，跳过"
+        return 0
+    fi
+    mkdir -p "$(dirname "$_user")"
+    # 只改 Exec= 一行；用户想恢复原生 Wayland 直接删掉这个覆盖文件
+    sed 's|^Exec=|Exec=env MOZ_ENABLE_WAYLAND=0 |' "$_sys" > "$_user"
+    chown -R "$DESKTOP_USER" "$(dirname "$_user")" 2>/dev/null || true
+    if grep -q 'MOZ_ENABLE_WAYLAND=0' "$_user"; then
+        info "已写入 $_user"
+        info "  恢复方式: rm $_user"
+    else
+        warn "生成 $_user 时未匹配到 Exec= 行，Firefox 可能仍走原生 Wayland"
     fi
 }
 
@@ -613,6 +674,12 @@ uninstall() {
     if [ -n "$DESKTOP_USER" ]; then
         as_desktop_user gsettings set org.gnome.desktop.input-sources sources \
             "[('xkb', 'us')]" 2>/dev/null || true
+        # 删掉 Firefox 的用户级 XIM 覆盖，恢复原生 Wayland
+        _ff="$(user_home "$DESKTOP_USER")/.local/share/applications/firefox-esr.desktop"
+        if [ -f "$_ff" ] && grep -q 'MOZ_ENABLE_WAYLAND=0' "$_ff"; then
+            rm -f "$_ff"
+            info "已删除 Firefox XIM 覆盖 $_ff"
+        fi
     fi
     info "完成。stevia 是源码安装（ninja install），没有 apt 包名；"
     info "要彻底清掉： cd /opt/stevia-src && sudo ninja -C _build uninstall"
@@ -679,6 +746,7 @@ else
     step "跳过 stevia（--skip-stevia）"
 fi
 enable_input_source
+setup_firefox_xim
 if [ "$REPLACE_NOW" = 1 ]; then
     replace_osk
 fi

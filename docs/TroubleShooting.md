@@ -218,3 +218,68 @@ GTK4 / Qt 应用在 phoc 下默认就是 Wayland，通常无需处理。
 | 候选顺序乱 | 是否加了 `--freq` |
 | meson dconf 报错 | 见第二节 |
 | apt 依赖冲突 | Mobian GTK3 补丁版冲突，`install.sh` 自动降级；手动见 `docs/Manual.md` 常见问题 A |
+---
+
+## 五、v1.0.5：词条与原生 Wayland 应用
+
+### 能打出汉字，但打不出词（v1.0.0 的已知缺陷）
+
+**症状**：输 `nihao` 只能拿到「你」「好」两个独立单字，后续音节从头开始。
+
+**根因不是配置问题，是词库本身没有词。** 三张 uim 拼音表经审计全是单音节→单字：
+
+| 表 | 条目 | 含 2 字及以上候选 |
+|---|---|---|
+| `pinyin-cn-utf8.scm`（v1.0.0 产物） | 1369 | **0** |
+| `py.scm`（uim 自带） | 454 | **0** |
+| `pyunihan.scm`（uim 自带） | 407 | **0** |
+
+uim 的 `rk` 引擎本身支持多音节键（表里 `hao` 就是逐字母的 `"h" "a" "o"`），
+只是没人往表里放词。v1.0.5 补进 79,228 条多音节词条，单字候选全部保留。
+
+自查引擎里有没有词条：
+
+```bash
+grep -c '^    (((' /usr/share/uim/pinyin-cn-utf8.scm   # 62,000+ = 含词条
+grep -o '((("n" "i" "h" "a" "o")) ("[^"]*"' /usr/share/uim/pinyin-cn-utf8.scm
+```
+
+若查不到「你好」，重跑一遍安装命令即可（幂等，会覆盖引擎文件）。
+
+> **踩过的坑**：规则表的键必须是**逐字母**的。词条 `ni hao` 要写成
+> `("n","i","h","a","o")`，写成 `("ni","hao")` uim 会当成按两次非法键，
+> 词条永远匹配不上 —— 症状是「生成脚本报告加了 N 条，但候选里一个词都没有」。
+
+### Firefox 等原生 Wayland 应用不弹屏幕键盘
+
+**症状**：系统应用和终端里点输入框能弹键盘，Firefox 里不能。
+
+**根因是 IM 协议代差**（已定位）：
+
+- stevia v0.55.0 只绑定 `zwp_input_method_manager_v2`（input-method v2，
+  只做物理键盘路由），而 phosh 0.46 提供 `zwp_text_input_manager_v3`
+  （text-input v3）——OSK 的 preedit/候选 UI 靠 v3 才显形。这是两个不同协议。
+- Firefox ESR 153 是**原生 Wayland**应用，直接跟 compositor 谈 v3，绕过 stevia。
+- 系统应用/终端走 GTK 的 v3 或 XIM，所以不受影响。
+
+确认协议：
+
+```bash
+pgrep -a uim-xim                # XIM 应在跑
+echo $MOZ_ENABLE_WAYLAND        # 1 = 原生 Wayland，会绕过 stevia
+ls /usr/lib/*/gtk-3.0/*/immodules/im-xim.so   # GTK 的 XIM 模块
+```
+
+解法：让 Firefox 退回 XWayland 走 XIM。`install.sh` 会写
+`~/.local/share/applications/firefox-esr.desktop`，只改 `Exec=` 加
+`MOZ_ENABLE_WAYLAND=0`。删掉该文件即恢复原生 Wayland。
+
+> 代价：Firefox 在 XWayland 下滚动、动画等原生 Wayland 特性略有差异。
+> 根治要等 stevia 支持 text-input v3。
+
+### 快速诊断清单补充
+
+| 症状 | 首查 |
+|------|------|
+| 只有单字没有词 | 引擎是否含词条（见上）；`grep -c '^    ((('` |
+| Firefox 里不弹键盘 | `echo $MOZ_ENABLE_WAYLAND`；设 `MOZ_ENABLE_WAYLAND=0` |

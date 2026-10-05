@@ -209,3 +209,101 @@ Debian trixie 只有 0.40.0。这不是能力缺失（stevia 只在
 - [ ] **上传/引码方案**：stevia 自带上传模式，可作为默认
 - [ ] **PC 端验证**：本项目只验证了 Mobian；其他发行版需按 `docs/Manual.md` 验证
 - [ ] 长期可用性：需要有人长期维护（这是上游放弃的部分）
+---
+
+## 六、为什么 v1.0.0 打不出词（2026-10-05 定位）
+
+### 排查过程
+
+v1.0.0 能打出汉字，但输 `nihao` 只能得到「你」「好」两个独立单字。
+
+最初怀疑是 uim custom 配置没生效 —— `generic.scm` 里
+`generic-use-candidate-window?` / `generic-show-candidate-implicitly?`
+这两个变量控制候选窗口，且在 `/usr/share/uim` 下**没有定义**，
+看起来像「默认关掉了」。于是往 `~/.uim.d/customs/custom-generic.scm`
+和 `~/.uim` 里追加定义，**行为完全没变**。
+
+### 两个错误假设
+
+1. **custom 文件名**：以为primary group 是 `generic`，写成 `custom-generic.scm`。
+   实际 `generic-custom.scm` 里用的是 `define-custom ... '(other-ims candwin)`，
+   `(car groups)` 才是 primary group，所以 uim 找的是 `custom-other-ims.scm`。
+2. **默认值**：以为这两个变量默认是 `#f`（关）。实际 `define-custom` 的第二参数
+   就是默认值 —— `generic-use-candidate-window? #t`、
+   `generic-show-candidate-implicitly? #t`，**默认本来就是开**。
+
+所以无论文件名写对与否，行为都不该变。这条线索是死胡同。
+
+### 真正的根因
+
+把设备上三张拼音表全拉下来审计，发现**全是单音节→单字，零词条**：
+
+| 表 | 条目| 含 2 字及以上候选 |
+|---|---|---|
+| `pinyin-cn-utf8.scm` | 1369 | **0** |
+| `py.scm` | 454 | **0** |
+| `pyunihan.scm` | 407 | **0** |
+
+所以 `ni` 精确命中后候选里根本没有「你好」，再输 `h` 就断了
+（`h` 和 `in` 单独都不在表里，表里只有 `hao`、`yin`）。
+
+### 引擎结构本来就支持词条
+
+`rk.scm` 的匹配语义（已读源码确认）：
+
+- `rk-push-key!` 走 **front-match**，`immediate-commit` 为 `#f`
+- `rk-cands-with-minimal-partial` 返回精确匹配 + **最长前缀**的部分匹配
+- 表里的键是**逐字母**的：`"h" "a" "o"` 表示按 h、a、o 三键
+
+所以 uim 的generic 引擎**天然支持多音节词**，`("n" "i" "h" "a" "o")` ->
+`("你好")` 是合法规则。只是上游 XCIN 表从来没往里放过词。
+
+离线模拟 rk 语义验证（`rk-lib-find-seq` + `rk-lib-find-partial-seqs`
+的行为复现），加词条后：
+
+```
+ nihao   -> 你好
+ nih     -> 你好+ao      <- 输到一半就提示
+ niha    -> 你好+o
+```
+
+### 实现要点
+
+词条数据用 **jieba**（34.9 万纯汉字词条，带词频）+ **pypinyin**
+（汉字→无声调拼音，正好补多音字），按词频取 top 80,000（覆盖 97.1% 词频质量）。
+
+> **踩过的坑（重要）**：规则表键必须与上游表同构，即**逐字母**。
+> 词条 `ni hao` 要展成 `("n","i","h","a","o")`；写成 `("ni","hao")`
+> 会被当成按两次非法键，症状是「脚本报告加了 N 条，候选里一个词都没有」。
+
+另一处坑：`convert_entry` 原本对所有候选跑 `score_candidate`，
+而多字词在词频表里查不到 → 得分 0 → 被排到单字后面。改成
+**多字候选恒定排在单字之前**（词条本身已按词频排好序）。
+
+---
+
+## 七、为什么原生 Wayland 应用（Firefox）不弹屏幕键盘
+
+### IM 协议代差
+
+| 协议 | 作用 | 谁提供 / 谁用 |
+|---|---|---|
+| `zwp_input_method_manager_v2` | 物理键盘路由（谁按的键发给谁） | stevia v0.55.0 绑定 |
+| `zwp_text_input_manager_v3` | 文本输入（preedit / 候选窗口 UI） | phoc 0.46 提供，GTK 应用用 |
+
+stevia v0.55.0 只绑了 input-method v2，**没有** text-input v3。
+而 OSK 的候选窗口靠 text-input v3 的 `preedit_string` / `cursor_rect`
+事件定位到输入框上方。
+
+Firefox ESR 153 是原生 Wayland 应用，直接跟 compositor 谈 text-input v3，
+于是绕过 stevia → 键盘不弹。系统应用和终端走 GTK 的 v3 或 XIM，
+GTK 会同时用 v3 和 IM module（`im-wayland.so` / `im-xim.so` 都在），
+所以不受影响。
+
+### 对策
+
+让 Firefox 退回 XWayland 走 XIM（`uim-xim` 本来就在跑）。
+只写 `~/.local/share/applications/` 的用户级 desktop 覆盖，不动系统文件。
+
+根治要等 stevia 支持 text-input v3 —— 那是 C 图形栈的活，
+对一个输入法项目来说改动面过大，且无法回退。

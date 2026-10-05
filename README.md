@@ -9,8 +9,61 @@
 > 命名说明：起名不蹭任何第三方产品名（不叫 fcitx-pinyin、sogou、mozc 等），
 > 「树入」= 树的输入法，同时是「输入」的谐音双关。
 
+**v1.0.5**（2026-10-05）：补上**多音节词条**（79,228 条），`nihao` 出「你好」；
+并让 **Firefox 等原生 Wayland 应用**能弹屏幕键盘。
+
 **v1.0.0**（2026-10-05）：在 OnePlus 6 / Mobian Debian 13 / phosh 0.46 / arm64
 真机上跑通——一条命令装完，重启后仍是中文键盘，打拼音出汉字候选。
+
+---
+
+## v1.0.5 解决了什么
+
+### 1. 词条：从「只有单字」到「能打词语」
+
+v1.0.0 能打出汉字，但**打不出词**——输 `nihao` 只能拿到「你」「好」两个独立单字，
+后续音节从头开始。这不是配置问题，是**词库本身没有词**：
+
+| 表 | 条目 | 含 2 字及以上候选 |
+|---|---|---|
+| `pinyin-cn-utf8.scm`（本项目 v1.0.0 产物） | 1369 | **0** |
+| `py.scm`（uim 自带） | 454 | **0** |
+| `pyunihan.scm`（uim 自带） | 407 | **0** |
+
+三张表全是单音节→单字映射。uim 的 `rk` 引擎**本身支持**多音节键（表里 `hao`
+就是逐字母的 `"h" "a" "o"`），只是没人往表里放词。
+
+v1.0.5 生成 **79,228 条多音节词条**（jieba 词频 + pypinyin 注音，按词频截取
+top 80,000，覆盖 97.1% 词频质量）。**单字候选全部保留**，词条排在同音节单字之前。
+
+真机验证（stevia 直接驱动 `cn`，逐键喂入`nihao`）：
+
+```
+[after 'n'] preedit='嗯'      候选：嗯 唔 那 拿 哪 纳 ...
+[after 'i'] preedit='你'      候选：你 妮 泥 尼 倪 ...
+[after 'a'] preedit='niha'    候选：你好 +o      <- 输到一半已提示完整词
+[after 'o']                  精确命中「你好」
+```
+
+### 2. Firefox 等原生 Wayland 应用不弹屏幕键盘
+
+**根因是 IM 协议代差**（已定位，非推测）：
+
+- stevia v0.55.0 只绑定 `zwp_input_method_manager_v2`（input-method v2，
+  只做物理键盘路由），而 phosh 0.46 提供 `zwp_text_input_manager_v3`
+  （text-input v3）——OSK 的 preedit/候选 UI 靠 v3 才显形。这是两个不同协议。
+- Firefox ESR 153 是**原生 Wayland** 应用，直接跟 compositor 谈 v3，绕过了 stevia。
+- 系统应用和终端走 GTK 的 v3 或 XIM，所以不受影响。
+
+**对策**：让 Firefox 退回 XWayland 改走 XIM（`uim-xim` 本来就在跑）。
+只写`~/.local/share/applications/firefox-esr.desktop` 的用户级覆盖，
+**不动系统文件**，删掉即回退。
+
+### 引擎预生成
+
+`install.sh` 现在**优先安装仓库里的预生成引擎**（`data/pinyin-cn-utf8.scm`），
+用户机器上不需要 Python、不需要 opencc、不需要 jieba/pypinyin，装完即可用。
+仓库里没有预生成产物时，才回退到现场生成（需要 python3）。
 
 ---
 
@@ -42,12 +95,6 @@ mode: off -> mode: on                      <- 自动打开输入模式
 [输入 'n']      preedit='嗯'   候选：嗯 唔 那 拿 哪 纳 ...
 [输入 'h','a','o'] preedit='好' 候选：好 蒿 嚆 号 毫 豪 ...
 ```
-
-**屏幕键盘侧尚未打通**：stevia 0.57.0 在这台机器上启动报
-`Failed to find all Wayland globals, giving up`。已排查：phoc 确实提供了
-`zwp_input_method_manager_v2`、`zwlr_layer_shell_v1`、`phosh_private` 等协议，
-缺的不是协议 global —— 怀疑是 stevia 0.57 与 phosh 0.46 的版本兼容性，
-属于屏幕键盘自身问题，与本项目生成的 uim 引擎无关。见「已知限制」。
 
 ---
 
