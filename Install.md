@@ -168,12 +168,15 @@ v1.0.5 补进79,228 条多音节词条，单字候选全部保留。若你的引
 treenput-dict add "ni hao" 你好     # 加词
 treenput-dict freq 你好 10          # 提频
 treenput-dict learn ~/notes.txt     # 从自己的文本学词频
-treenput-dict apply                 # 生效（自动备份引擎）
+treenput-dict apply                 # 生效：改引擎 + 自动重启屏幕键盘
 treenput-dict list                  # 看已加的
 ```
 
 你加的词在候选里**排最前**，比内置那 79,228 条都靠前。
 数据全在 `~/.config/treenput/`，`apply` 前会自动备份引擎。
+
+> `apply` 会重启屏幕键盘进程（`phosh-osk-stevia`）——引擎是进程启动时加载的，
+> 不重启就读不到新词。键盘会闪一下，属正常。不想重启加 `--no-restart`。
 
 完整说明见 [README](README.md)。
 

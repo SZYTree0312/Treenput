@@ -9,6 +9,10 @@
 > 命名说明：起名不蹭任何第三方产品名（不叫 fcitx-pinyin、sogou、mozc 等），
 > 「树入」= 树的输入法，同时是「输入」的谐音双关。
 
+**v1.1.0**（2026-10-08）：**用户词典**——`treenput-dict` 加自己的词、调词频，
+`apply` 后自动重启屏幕键盘即刻生效。真机实测：`shurufa` 出「树入法」并压过
+内置的「输入法」，`sunzheyuan` 这种引擎里原本没有的音节也能新建桶。
+
 **v1.0.5**（2026-10-05）：补上**多音节词条**（79,228 条），`nihao` 出「你好」。
 
 **v1.0.0**（2026-10-05）：在 OnePlus 6 / Mobian Debian 13 / phosh 0.46 / arm64
@@ -168,10 +172,15 @@ curl -fsSL https://raw.githubusercontent.com/SZYTree0312/Treenput/main/install.s
 ```sh
 treenput-dict add "ni hao" 你好     # 拼音 + 词
 treenput-dict addw 你好             # 只给词，自动注音（需 pypinyin）
-treenput-dict apply                 # 生效（自动备份引擎）
+treenput-dict apply                 # 生效：改引擎 + 自动重启屏幕键盘
 ```
 
 你加的词在候选里**排最前**，比内置那 79,228 条都靠前。
+
+> 引擎是输入法**进程启动时**加载进内存的，光改磁盘上的文件没用 —— 所以
+> `apply` 会顺手 `systemctl --user restart phosh-osk-stevia`（只重启屏幕键盘
+> 这一个进程，键盘闪一下就回来，不是重启 phosh）。不想让它重启用
+> `apply --no-restart`，那样新词下次启动才生效。
 
 ### 调频（长期校准）
 
@@ -194,7 +203,10 @@ treenput-dict status                # 看状态
 ```
 
 每次 `apply` 前自动备份引擎到
-`/usr/share/uim/pinyin-cn-utf8.scm.bak-ud-<时间戳>`，改坏了随时能换回来。
+`~/.config/treenput/backups/pinyin-cn-utf8.scm.bak-ud-<时间戳>`，改坏了随时能换回来。
+
+（备份放用户目录而不是引擎旁边，是因为 `/usr/share/uim` 归 root，
+普通用户在那里建不了新文件 —— 备份会直接失败。）
 
 ### 为什么是增量应用
 

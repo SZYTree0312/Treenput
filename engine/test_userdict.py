@@ -15,6 +15,12 @@
   5. 提频后重排
   6. 删词后真的消失
   7. learn 从文本校准词频
+  8. 新音节插入后**文件结构仍然合法**（这条是真机踩出来的）
+
+第 8 条的来历：新音节原本走 append 到文件末尾，而末尾是整张表的闭合括号
+`pinyin-cn-utf8-init-handler)` —— 规则行落到它后面就成了裸列表，Scheme 会当
+函数调用，uim 报 `procedure or syntax required but got: "s"` 且整个引擎失效。
+只查候选顺序是发现不了的，必须查结构。
 """
 import shutil
 import subprocess
@@ -52,6 +58,30 @@ def run(*args):
 
 def bucket(*letters):
     return U.EnginePatcher(engine).load()._get(tuple(letters))
+
+
+def check_structure(label):
+    """规则行必须全部落在整张表的闭合括号之前，否则 uim 加载就炸。"""
+    global ok
+    lines = engine.read_text(encoding="utf-8").split("\n")
+    close = None
+    for i in range(len(lines) - 1, -1, -1):
+        if "init-handler" in lines[i] and lines[i].rstrip().endswith(")"):
+            close = i
+            break
+    if close is None:
+        print("  FAIL %s：找不到规则表的闭合行" % label)
+        ok = False
+        return
+    bad = [i + 1 for i, ln in enumerate(lines)
+           if U.RULE_RE.match(ln) and i > close]
+    if bad:
+        print("  FAIL %s：%d 条规则行落在闭合括号之后（行号 %s）"
+              % (label, len(bad), bad[:5]))
+        print("       uim 会当函数调用，报 procedure or syntax required")
+        ok = False
+    else:
+        print("  PASS %s（规则行全在表内，闭合行在第 %d 行）" % (label, close + 1))
 
 
 def check(label, got, expect_head=None, expect_absent=None):
@@ -110,6 +140,22 @@ txt = tmp / "note.txt"
 txt.write_text("你好吗你好吗你好吗，我今天去了实验室。" * 3, encoding="utf-8")
 run("learn", str(txt))
 run("apply")
+
+# 8) 新音节：引擎里原本没有这个键，必须新建规则行 —— 落错位置会毁掉整张表
+run("add", "sun zhe yuan", "孙哲远", "--freq", "300")
+run("apply")
+check("新音节建桶", bucket("s", "u", "n", "z", "h", "e", "y", "u", "a", "n"),
+      expect_head=["孙哲远"])
+check_structure("新音节插入后结构合法")
+
+# 再加一个新音节，确认连续插入不会把行号算错
+run("add", "shu ru fa", "树入法", "--freq", "200")
+run("apply")
+check("连续新音节", bucket("s", "h", "u", "r", "u", "f", "a"),
+      expect_head=["树入法", "输入法"])
+check_structure("连续插入后结构合法")
+# 已有音节仍要正常（验证插入后行号偏移没把别的桶改错）
+check("新音节不影响已有桶", bucket("n", "i"), expect_head=["你丫", "你"])
 
 run("status")
 run("list")

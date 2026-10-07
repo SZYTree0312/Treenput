@@ -216,7 +216,9 @@ build_engine() {
     if [ -s "$_prebuilt" ]; then
         install -m 0644 "$_prebuilt" "$ENGINE" || die "引擎文件安装失败：$ENGINE"
         local _pc
-        _pc=$(grep -c '^\s*((\(' "$ENGINE" 2>/dev/null || echo 0)
+        # 用 POSIX 字符类，别写 \s —— grep 的 BRE 不认它，实测直接数出 0 条，
+        # 看着像引擎装坏了，其实只是这条命令没匹配上。
+        _pc=$(grep -c '^[[:space:]]*(((' "$ENGINE" 2>/dev/null || echo 0)
         info "已安装预生成引擎 $_prebuilt -> $ENGINE"
         info "  规则条目 $_pc 条（含多音节词条）"
         return 0
@@ -547,6 +549,14 @@ install_userdict_tool() {
         mkdir -p "$_d"
         chown -R "$DESKTOP_USER" "$_d" 2>/dev/null || true
         info "词典目录：$_d"
+    fi
+    # 引擎文件必须交给桌面用户。treenput-dict 是用户在自己终端里跑的，
+    # 引擎却由 root 写入 —— 不改归属的话 apply 会以 PermissionError 崩掉
+    # （首次真机实测就撞上了）。只改文件属主，目录保持 root，
+    # 写已有文件只需文件 w 位 + 目录 x 位，够用。
+    if [ -n "$DESKTOP_USER" ] && [ -f "$ENGINE" ]; then
+        chown "$DESKTOP_USER" "$ENGINE" 2>/dev/null || true
+        info "引擎已交给 $DESKTOP_USER（apply 需要写权限）"
     fi
 }
 

@@ -47,6 +47,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import time
@@ -241,9 +242,21 @@ class EnginePatcher:
     def _set(self, key: tuple[str, ...], cands: list[str]) -> None:
         i = self.rules.get(key)
         if i is None:
-            # 新音节：追加到规则表末尾。rk 是按最长前缀匹配，不依赖行序。
-            self.lines.insert(len(self.lines) - 1, self._render(key, cands))
-            self.rules[key] = len(self.lines) - 2
+            # 新音节：插到规则表**内部**，即最后一条规则行的后面。
+            #
+            # 不能图省事 append 到文件末尾：末尾是整张表的闭合括号
+            # （`pinyin-cn-utf8-init-handler)`），插到它之后这行就成了裸列表，
+            # Scheme 会把它当函数调用 —— uim 直接报
+            #   "procedure or syntax required but got: \"s\""
+            # 并且整个引擎失效（真机实测踩到）。rk 按最长前缀匹配，不依赖行序，
+            # 所以放在表内最后一条是安全的。
+            anchor = (max(self.rules.values()) + 1) if self.rules else 0
+            self.lines.insert(anchor, self._render(key, cands))
+            # 插入点之后的行号整体后移，否则后续 _get/_set 会改错行
+            for k, v in list(self.rules.items()):
+                if v >= anchor:
+                    self.rules[k] = v + 1
+            self.rules[key] = anchor
         else:
             m = RULE_RE.match(self.lines[i])
             indent = m.group("indent") if m else "    "
@@ -286,12 +299,23 @@ class EnginePatcher:
             changed += 1
         return changed
 
-    def save(self, backup: bool = True) -> Path | None:
+    def save(self, backup: bool = True, backup_dir: Path | None = None) -> Path | None:
+        """写回引擎。
+
+        backup_dir 默认是引擎同目录，但那里通常是 root 的（/usr/share/uim），
+        普通用户建不了新文件 —— 备份会 PermissionError，而引擎本身反而能写。
+        所以调用方把备份指到用户自己的目录下。
+        """
         bak = None
         if backup and self.path.exists():
-            bak = self.path.with_suffix(
-                self.path.suffix + ".bak-ud-%s" % time.strftime("%Y%m%d-%H%M%S")
-            )
+            if backup_dir is not None:
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                name = self.path.name + ".bak-ud-%s" % time.strftime("%Y%m%d-%H%M%S")
+                bak = backup_dir / name
+            else:
+                bak = self.path.with_suffix(
+                    self.path.suffix + ".bak-ud-%s" % time.strftime("%Y%m%d-%H%M%S")
+                )
             bak.write_text(self.path.read_text(encoding="utf-8", errors="replace"),
                            encoding="utf-8")
         self.path.write_text("\n".join(self.lines), encoding="utf-8")
@@ -468,6 +492,65 @@ def cmd_learn(args) -> int:
     return 0
 
 
+def _current_user() -> str:
+    try:
+        import pwd
+        return pwd.getpwuid(os.getuid()).pw_name
+    except Exception:
+        return os.environ.get("USER") or os.environ.get("LOGNAME") or "$(whoami)"
+
+
+def _writable(p: Path) -> bool:
+    """root 一律算可写；否则看文件本身（不存在就看父目录）的写权限。"""
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return True
+    target = p if p.exists() else p.parent
+    return os.access(target, os.W_OK)
+
+
+OSK_UNIT = "phosh-osk-stevia.service"
+
+
+def _reload_input_method() -> bool:
+    """让正在跑的屏幕键盘重新读一遍引擎。
+
+    引擎是进程**启动时**加载进内存的，改完磁盘上的 .scm，已经在跑的 stevia
+    还抱着旧表 —— 不重启的话用户会以为词没加上。这里只重启 OSK 这一个 user
+    unit（不是重启 phosh），代价是键盘闪一下，比让人手敲命令强。
+
+    失败**不算 apply 失败**：词已经写进引擎了，只是得等下次启动。
+    """
+    import shutil
+    import subprocess
+    if not shutil.which("systemctl"):
+        return False
+    try:
+        r = subprocess.run(
+            ["systemctl", "--user", "restart", OSK_UNIT],
+            capture_output=True, text=True, timeout=30,
+        )
+        return r.returncode == 0
+    except Exception:
+        # 没有 systemd user session（比如 SSH 里没登录会话）等情况，静默降级
+        return False
+
+
+def _print_engine_perm_help(engine: Path, home: Path, args) -> None:
+    """引擎是 root 装的，本命令却跑在用户终端里 —— 说清怎么修，别甩 traceback。"""
+    user = _current_user()
+    print("[失败] 引擎文件不可写：%s" % engine, file=sys.stderr)
+    print("  引擎由安装脚本以 root 写入，当前用户 %s 没有写权限。" % user,
+          file=sys.stderr)
+    print("")
+    print("  修一次即可（之后 apply 都不用 sudo）：", file=sys.stderr)
+    print("    sudo chown %s %s" % (user, engine), file=sys.stderr)
+    print("")
+    print("  或每次用 sudo 跑 —— 必须带 --home，否则 sudo 下 HOME=/root",
+          file=sys.stderr)
+    print("  会找错词典，把你的词写进 root 的目录：", file=sys.stderr)
+    print("    sudo treenput-dict --home %s apply" % home, file=sys.stderr)
+
+
 def cmd_apply(args) -> int:
     home = Path(args.home) if getattr(args, "home", None) else DEFAULT_HOME
     home.mkdir(parents=True, exist_ok=True)
@@ -485,12 +568,25 @@ def cmd_apply(args) -> int:
         print("先跑安装，或用 --engine 指定路径", file=sys.stderr)
         return 1
 
+    # 引擎是 root 装的，而本命令是用户在自己终端里跑的 —— 权限不对就直接崩成
+    # 一屏 traceback，太难读。这里先拦下来，给出能照抄的修法。
+    if not _writable(engine):
+        _print_engine_perm_help(engine, home, args)
+        return 1
+
     cur = {e.word for e in ud.entries}
     removed = prev - cur
 
     patcher = EnginePatcher(engine).load()
     n = patcher.apply(ud.entries, removed)
-    bak = patcher.save(backup=not args.no_backup)
+    try:
+        # 备份落在用户目录：引擎所在目录（/usr/share/uim）建不了新文件
+        bak = patcher.save(backup=not args.no_backup,
+                           backup_dir=None if args.no_backup else home / "backups")
+    except PermissionError as exc:
+        print("[失败] 写引擎被拒绝：%s" % exc, file=sys.stderr)
+        _print_engine_perm_help(engine, home, args)
+        return 1
 
     applied_file.write_text("\n".join(sorted(cur)) + ("\n" if cur else ""),
                             encoding="utf-8")
@@ -499,6 +595,15 @@ def cmd_apply(args) -> int:
     print("  用户词 %d 条，变动规则行 %d，删除 %d 条" % (len(ud.entries), n, len(removed)))
     if bak:
         print("  备份：%s" % bak)
+    # 引擎是进程启动时加载的，改文件不会让正在跑的输入法重新读一遍。
+    # 所以这里直接替用户重启 OSK —— 手动敲命令太容易忘，忘了就以为没生效。
+    if getattr(args, "no_restart", False):
+        print("  已跳过重启（--no-restart），新词下次输入法启动时生效")
+    elif _reload_input_method():
+        print("  已重启屏幕键盘（%s），新词立即生效" % OSK_UNIT)
+    else:
+        print("  [警告] 没能自动重启屏幕键盘，新词下次启动才生效。手动执行：")
+        print("    systemctl --user restart %s" % OSK_UNIT)
     return 0
 
 
@@ -562,8 +667,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--weight", type=int, default=5, help="每次出现的权重")
     s.set_defaults(func=cmd_learn)
 
-    s = sub.add_parser("apply", help="应用到引擎（自动备份）")
+    s = sub.add_parser("apply", help="应用到引擎（自动备份 + 自动重启输入法）")
     s.add_argument("--no-backup", action="store_true", help="不备份引擎")
+    s.add_argument("--no-restart", action="store_true",
+                   help="不自动重启屏幕键盘（新词下次启动才生效）")
     s.set_defaults(func=cmd_apply)
 
     s = sub.add_parser("status", help="查看状态")
