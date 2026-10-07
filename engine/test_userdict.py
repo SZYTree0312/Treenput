@@ -141,11 +141,15 @@ txt.write_text("你好吗你好吗你好吗，我今天去了实验室。" * 3, 
 run("learn", str(txt))
 run("apply")
 
-# 8) 新音节：引擎里原本没有这个键，必须新建规则行 —— 落错位置会毁掉整张表
-run("add", "sun zhe yuan", "孙哲远", "--freq", "300")
+# 8) 新音节：引擎里原本没有这个键，必须新建规则行 —— 落错位置会毁掉整张表。
+#    先断言前提成立，否则这个用例会静默失去覆盖（词库变了就换个键）。
+NEW_KEY = ("c", "e", "s", "h", "i", "c", "i")
+if NEW_KEY in U.EnginePatcher(engine).load().rules:
+    print("  FAIL 前提失效：%s 在引擎里已存在，换个键" % "".join(NEW_KEY))
+    ok = False
+run("add", "ce shi ci", "测试词", "--freq", "300")
 run("apply")
-check("新音节建桶", bucket("s", "u", "n", "z", "h", "e", "y", "u", "a", "n"),
-      expect_head=["孙哲远"])
+check("新音节建桶", bucket(*NEW_KEY), expect_head=["测试词"])
 check_structure("新音节插入后结构合法")
 
 # 再加一个新音节，确认连续插入不会把行号算错
