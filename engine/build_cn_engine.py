@@ -49,11 +49,38 @@ from pathlib import Path
 # pinyin-big5.scm 里的候选行形如：
 #     ((("b" "a" "i")) ("掰" "白" "百" ...))
 # 音节用空格分隔的拼音字母，候选是一串双引号包裹的汉字。
+#
+# 注意：不能写成 `\[^()\]*` 去匹配键序列 —— 键位本身可以是 `(`、`)` 这类
+# 标点（v1.1.3 起符号键进表），那样括号会被当成结构括号，圆括号键位直接
+# 匹配不上。只认「带引号的字符串」来切分才稳。
+_STR = r'"(?:[^"\\]|\\.)*"'
 ENTRY_RE = re.compile(
-    r'\(\(\((?P<syllable>[^()]*)\)\)\s*\((?P<candidates>[^()]*)\)',
+    r'\(\(\(\s*(?P<syllable>(?:%s\s*)*)\)\)\s*'
+    r'\(\s*(?P<candidates>(?:%s\s*)*)\)' % (_STR, _STR),
     re.S,
 )
-QUOTED_RE = re.compile(r'"([^"]*)"')
+QUOTED_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+ESCAPED_QUOTED_RE = QUOTED_RE
+
+
+def scm_escape(s: str) -> str:
+    """Scheme 字符串转义：反斜杠与双引号。与 userdict.py 的 _escape 一致。
+
+    不转义的话双引号键位会渲染出三个连续引号，非法 Scheme，
+    uim 解析直接失败，整张表作废 —— 真机踩过的坑。
+    """
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def scm_unescape(s: str) -> str:
+    return s.replace('\\"', '"').replace("\\\\", "\\")
+
+
+def _render_entry(syllable: tuple[str, ...], candidates: list[str]) -> str:
+    """渲染一条规则行（含转义）。"""
+    syl_text = " ".join('"%s"' % scm_escape(s) for s in syllable)
+    cand_text = " ".join('"%s"' % scm_escape(c) for c in candidates)
+    return "    (((%s)) (%s))" % (syl_text, cand_text)
 
 # uim 拼音表里用假名/注音符号表示"仅作占位、不是真汉字"的条目，
 # 例如 "ㄚ" "ㄞ" "£"。这些不应该出现在简体中文候选里。
@@ -149,14 +176,14 @@ def parse_table(path: Path) -> dict[tuple[str, ...], list[str]]:
     table: dict[tuple[str, ...], list[str]] = {}
     for match in ENTRY_RE.finditer(raw):
         syllable_raw = match.group("syllable")
-        letters = QUOTED_RE.findall(syllable_raw)
+        letters = [scm_unescape(x) for x in ESCAPED_QUOTED_RE.findall(syllable_raw)]
         syllable = tuple(l.strip().lower() for l in letters if l.strip())
         if not syllable:
             continue
         # 丢弃纯符号音节（"!" "#" "|" "}" 等非拼音条目）
         if any(NON_PINYIN_SYL.search(s) for s in syllable):
             continue
-        candidates = QUOTED_RE.findall(match.group("candidates"))
+        candidates = [scm_unescape(x) for x in ESCAPED_QUOTED_RE.findall(match.group("candidates"))]
         # 去重但保持原顺序
         seen: set[str] = set()
         cleaned: list[str] = []
@@ -287,6 +314,66 @@ def load_phrases(path: Path | None) -> dict[tuple[str, ...], list[tuple[str, int
     return out
 
 
+def load_punct(path: Path | None) -> dict[tuple[str, ...], list[str]]:
+    """读取符号表 -> {键元组: 候选列表}。
+
+    格式（每行）：`键序列<TAB>候选1[<TAB>候选2 ...]`，# 开头注释。
+    键是逐字符的，与引擎键同构（`, ` -> (",",)；候选1 是默认上屏的，
+    其余进候选窗。
+
+    为什么需要这个文件：上游 pinyin-big5.scm 尾部虽有 41 条符号条目，
+    但候选混着全角变体与竖排符号、引号绑在 #'/#\\ 组合键上（拇指键盘
+    按不出），所以这里用一份精选表替代，不依赖上游。
+    """
+    out: dict[tuple[str, ...], list[str]] = {}
+    if path is None or not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.rstrip("\n")
+        # 注释行：# 后跟空格或行尾。不能一刀切 startswith("#") ——
+        # `#` 本身是个键位（＃），它的行是 "#\t＃"，会被误当注释吞掉。
+        if not line or line == "#" or line.startswith("# "):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        keys = tuple(parts[0].strip())
+        cands = [c.strip() for c in parts[1:] if c.strip()]
+        if not keys or not cands:
+            continue
+        # 去重保持顺序
+        seen: set[str] = set()
+        dedup: list[str] = []
+        for c in cands:
+            if c not in seen:
+                seen.add(c)
+                dedup.append(c)
+        out[keys] = dedup
+    return out
+
+
+def merge_punct(
+    table: dict[tuple[str, ...], list[str]],
+    punct: dict[tuple[str, ...], list[str]],
+) -> int:
+    """把符号候选并进规则表。
+
+    符号键（", " "." 等）与拼音音节键共享同一张 rk 规则表：rk 是
+    front-match 按序列匹配，单键 `(", " )` 是个独立条目，不会和字母
+    键冲突（打字时不会按出逗号键）。合并时符号候选**排在该键候选的
+    最前面** —— 不过符号键的桶里本来就只有符号，直接 setdefault 落桶。
+    """
+    added = 0
+    for keys, cands in punct.items():
+        bucket = table.setdefault(keys, [])
+        existing = set(bucket)
+        fresh = [c for c in cands if c not in existing]
+        if fresh:
+            table[keys] = fresh + bucket
+            added += len(fresh)
+    return added
+
+
 def merge_phrases(
     table: dict[tuple[str, ...], list[str]],
     phrases: dict[tuple[str, ...], list[tuple[str, int]]],
@@ -325,11 +412,13 @@ RULE_TEMPLATE = """;; pinyin-cn-utf8.scm -- 简体拼音引擎
 ;;     重新生成: python3 engine/build_cn_engine.py \\
 ;;         --input /usr/share/uim/pinyin-big5.scm \\
 ;;         --output /usr/share/uim/pinyin-cn-utf8.scm \\
-;;         --freq data/frequency.txt --phrase data/phrase.txt
+;;         --freq data/frequency.txt --phrase data/phrase.txt \\
+;;         --punct data/punct.txt
 ;;
 ;; 上游表: /usr/share/uim/pinyin-big5.scm (uim-data, XCIN 项目)
 ;; 处理:   繁体转简体 (OpenCC t2s) + 过滤注音/假名占位 + 词频分层排序
 ;; 词条:   __PHRASE__ 条多音节词（jieba词频 + pypinyin，见engine/build_phrase_dict.py）
+;; 符号:   __PUNCT__ 个中文标点/符号候选（data/punct.txt）
 ;; 条目:   __COUNT__ 条音节，__TOTAL__ 个候选
 (define pinyin-cn-utf8-rule
   '((BODY)))
@@ -380,6 +469,7 @@ def render(
     freq: dict[str, int],
     t2s: T2S,
     n_phrase: int = 0,
+    n_punct: int = 0,
 ) -> tuple[str, int, int]:
     blocks: list[str] = []
     total = 0
@@ -388,14 +478,13 @@ def render(
         if not candidates:
             continue
         total += len(candidates)
-        syl_text = " ".join('"%s"' % s for s in syllable)
-        cand_text = " ".join('"%s"' % c for c in candidates)
-        blocks.append("    (((%s)) (%s))" % (syl_text, cand_text))
+        blocks.append(_render_entry(syllable, candidates))
     body = "\n".join(blocks)
     header = (
         RULE_TEMPLATE.replace("__COUNT__", str(len(blocks)))
         .replace("__TOTAL__", str(total))
         .replace("__PHRASE__", str(n_phrase))
+        .replace("__PUNCT__", str(n_punct))
         .replace("(BODY)", body)
     )
     # uim 表习惯在最后留一个换行
@@ -413,6 +502,8 @@ def main() -> int:
     ap.add_argument("--freq", default=None, help="可选词频文件，每行一词")
     ap.add_argument("--phrase", default=None,
                     help="可选词条文件（build_phrase_dict.py 产物）")
+    ap.add_argument("--punct", default=None,
+                    help="可选符号表文件（data/punct.txt 格式）")
     args = ap.parse_args()
 
     src = Path(args.input)
@@ -437,10 +528,29 @@ def main() -> int:
     else:
         print("未提供词条文件：只有单字候选，输入多音节词会中断（见 --phrase）")
 
-    # 先把所有候选里出现过的汉字收集起来，一次性做繁->简转换
+    # 符号同样在 t2s.warm 之前并入（符号不含汉字，t2s 会原样透传，
+    # 但统一走一个流程省得单独处理）。
+    n_punct = 0
+    if args.punct:
+        punct = load_punct(Path(args.punct))
+        n_punct = merge_punct(table, punct)
+        print("符号: %d 个候选并入规则表（%d 个键位）"
+              % (n_punct, len(punct)))
+    else:
+        print("未提供符号表：标点只能靠应用自带（见 --punct）")
+
+    # 先把所有候选里出现过的汉字收集起来，一次性做繁->简转换。
+    # 注意：符号不能混进去 —— t2s.warm 会把符号也交给 opencc，而
+    # opencc 对某些全角符号有「转换后长度变化」的边界情况，且 BOGUS_CHARS
+    # 里的 £€ 就会被误过滤。这里只收汉字。
     t2s = T2S()
     all_chars: set[str] = set()
-    for cands in table.values():
+    punct_keys: set[tuple[str, ...]] = set()
+    if args.punct:
+        punct_keys = set(load_punct(Path(args.punct)).keys())
+    for syl, cands in table.items():
+        if syl in punct_keys:
+            continue  # 符号桶不进 t2s
         for cand in cands:
             all_chars.update(cand)
     t2s.warm(all_chars)
@@ -451,11 +561,12 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     # 用 render 回传的计数，保证终端输出与文件头注释一致
     # （table 里的候选数是转换前的，转换后一简对多繁会塌缩，两者不等）
-    text, n_syllable, n_cand = render(table, freq, t2s, n_phrase)
+    text, n_syllable, n_cand = render(table, freq, t2s, n_phrase, n_punct)
     out.write_text(text, encoding="utf-8")
 
     print("已生成 %s" % out)
-    print("  音节 %d 条 / 候选 %d 个（其中多字词 %d 个）" % (n_syllable, n_cand, n_phrase))
+    print("  音节 %d 条 / 候选 %d 个（其中多字词 %d 个，符号 %d 个）"
+          % (n_syllable, n_cand, n_phrase, n_punct))
     if not freq:
         print("  未提供词频文件，仅用内置常用字基线排序（建议加 --freq 提升手感）")
     return 0

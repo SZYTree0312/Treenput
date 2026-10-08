@@ -210,6 +210,7 @@ build_engine() {
     _prebuilt="$REPO_DIR/data/pinyin-cn-utf8.scm"
     _phrase="$REPO_DIR/data/phrase.txt"
     _freq="$REPO_DIR/data/frequency.txt"
+    _punct="$REPO_DIR/data/punct.txt"
 
     # 优先用仓库里的预生成引擎：用户机器上不需要 Python、不需要 opencc、
     # 也不需要 jieba/pypinyin，装完即可用。这是 1.1.0 起的默认路径。
@@ -230,6 +231,8 @@ build_engine() {
     [ -f "$UIM_TABLE" ] || die "找不到上游拼音表 $UIM_TABLE（uim-data 装上了吗）"
     set -- --input "$UIM_TABLE" --output "$ENGINE"
     [ -f "$_phrase" ] && set -- "$@" --phrase "$_phrase"
+    # 符号表：丢了它引擎里就没有中文标点（v1.1.3 之前的坑）
+    [ -f "$_punct" ] && set -- "$@" --punct "$_punct"
     if [ -f "$_freq" ]; then
         set -- "$@" --freq "$_freq"
     else
@@ -240,6 +243,9 @@ build_engine() {
     [ -s "$ENGINE" ] || die "引擎文件生成失败：$ENGINE"
     if [ ! -f "$_phrase" ]; then
         warn "未找到 data/phrase.txt：只有单字候选，多音节词会中断"
+    fi
+    if [ ! -f "$_punct" ]; then
+        warn "未找到 data/punct.txt：打不出中文标点（按 , 只出半角逗号）"
     fi
 }
 

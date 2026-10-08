@@ -17,6 +17,10 @@ install.sh text eol=lf
 data/frequency.txt text eol=lf
 *.txt text eol=lf
 
+# 文档同样强制 LF：不然 Windows 检出成 CRLF，每次 commit 都刷
+# "LF will be replaced by CRLF" 警告，噪声盖住真正需要注意的信息。
+*.md text eol=lf
+
 # 二进制，明确不打行尾转换
 *.png binary
 *.jpg binary
