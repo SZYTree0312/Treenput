@@ -22,6 +22,7 @@
 函数调用，uim 报 `procedure or syntax required but got: "s"` 且整个引擎失效。
 只查候选顺序是发现不了的，必须查结构。
 """
+import atexit
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,10 @@ PY = sys.executable
 SCRIPT = repo / "engine" / "userdict.py"
 
 tmp = Path(tempfile.mkdtemp(prefix="treenput-ud-"))
+# 跑完必须自己清掉。以前只在结尾打印「临时目录（可删）」，结果每跑一次
+# 测试就在 %TEMP% 里多留一个 treenput-ud-* —— 那是给别人添垃圾。
+# 用 atexit 注册而不是只在末尾删：中途断言失败/异常退出时也能收干净。
+atexit.register(lambda: shutil.rmtree(tmp, ignore_errors=True))
 engine = tmp / "pinyin-cn-utf8.scm"
 shutil.copy(repo / "data" / "pinyin-cn-utf8.scm", engine)
 home = tmp / "home"
@@ -167,6 +172,5 @@ run("list")
 print("\n" + "=" * 62)
 print("结果：%s" % ("全部通过" if ok else "有失败项"))
 print("=" * 62)
-print("临时目录（可删）: %s" % tmp)
 
 sys.exit(0 if ok else 1)
